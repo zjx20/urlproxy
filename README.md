@@ -98,6 +98,12 @@ There are some special url parameters that can further control the proxy behavio
     $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptDns=8.8.8.8:53"
     ```
 
+* `urlproxyOptIp`: specify the IP address of the target server for this request.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptIp=3.229.200.44"
+    ```
+
 ### Alternate Url Pattern
 
 Control parameters can be placed in path in addition to the url parameter. This can be useful in some cases.

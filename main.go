@@ -32,6 +32,7 @@ const (
 	optSchema = optPrefix + "Schema"
 	optSocks  = optPrefix + "Socks"
 	optDns    = optPrefix + "Dns"
+	optIp     = optPrefix + "Ip"
 )
 
 var (
@@ -187,11 +188,24 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 		}
 	}
 
+	host := proxyUrl.Host
+	if opts.Has(optIp) {
+		port := proxyUrl.Port()
+		if port != "" {
+			proxyUrl.Host = opts.Get(optIp) + ":" + port
+		} else {
+			proxyUrl.Host = opts.Get(optIp)
+		}
+	}
+
 	proxyReq, err = http.NewRequestWithContext(
 		req.Context(), req.Method, proxyUrl.String(), req.Body)
 	if err != nil {
 		return
 	}
+
+	// force set Host
+	proxyReq.Host = host
 
 	// forward headers
 	for k := range req.Header {
