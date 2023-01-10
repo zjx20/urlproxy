@@ -124,6 +124,12 @@ There are some special url parameters that can further control the proxy behavio
     $ curl "http://127.0.0.1:8765/httpbin.org:1234/get?urlproxyOptRetriesError=3"
     ```
 
+* `urlproxyOptAntiCaching`: anti-caching by adding `__t=<current time in nanoseconds>` parameter to the request URL.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptAntiCaching=true"
+    ```
+
 ### Alternate Url Pattern
 
 Control parameters can be placed in path in addition to the url parameter. This can be useful in some cases.

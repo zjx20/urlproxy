@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -38,6 +39,7 @@ const (
 	optTimeoutMs     = optPrefix + "TimeoutMs"
 	optRetriesNon2xx = optPrefix + "RetriesNon2xx"
 	optRetriesError  = optPrefix + "RetriesError"
+	optAntiCaching   = optPrefix + "AntiCaching"
 )
 
 var (
@@ -61,7 +63,8 @@ var (
 )
 
 var (
-	instUUID = uuid.NewString()
+	instUUID   = uuid.NewString()
+	clientPool = sync.Map{}
 )
 
 type connEx struct {
@@ -81,13 +84,15 @@ type dialer interface {
 	DialContext(ctx context.Context, network, addr string) (c net.Conn, err error)
 }
 
-func getDialer(opts url.Values) (dialer, bool) {
+func getDialer(opts url.Values) (dialer, string, bool) {
+	var identifier string
 	var direct dialer = &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
 	if opts.Has(optDns) {
 		dns := opts.Get(optDns)
+		identifier += "[dns:" + dns + "]"
 		direct.(*net.Dialer).Resolver = &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -102,24 +107,29 @@ func getDialer(opts url.Values) (dialer, bool) {
 		socksAddr = opts.Get(optSocks)
 		if socksAddr == "" || socksAddr == "off" {
 			// optSocks == "" or "off" means user wants to disable socks proxying
-			return direct, false
+			return direct, identifier, false
 		}
 	}
 	pd := proxy.FromEnvironmentUsing(direct)
 	if socksAddr != "" {
+		identifier += "[socks:" + socksAddr + "]"
 		pd, _ = proxy.SOCKS5("tcp", socksAddr, nil, direct)
 	} else if *socksUds != "" {
+		identifier += "[socks-uds:" + *socksUds + "]"
 		pd, _ = proxy.SOCKS5("unix", *socksUds, nil, direct)
 	}
 	if pd == nil {
-		return direct, false
+		return direct, identifier, false
 	} else {
-		return pd.(dialer), pd.(dialer) != direct
+		return pd.(dialer), identifier, pd.(dialer) != direct
 	}
 }
 
 func getHttpCli(opts url.Values) *http.Client {
-	d, socksed := getDialer(opts)
+	d, identifier, socksed := getDialer(opts)
+	if cli, ok := clientPool.Load(identifier); ok {
+		return cli.(*http.Client)
+	}
 	// same as http.DefaultTransport
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -133,7 +143,9 @@ func getHttpCli(opts url.Values) *http.Client {
 	if socksed {
 		transport.Proxy = nil // uses dialer's proxy
 	}
-	return &http.Client{Transport: transport}
+	cli := &http.Client{Transport: transport}
+	clientPool.Store(identifier, cli)
+	return cli
 }
 
 func forward(from, to *connEx, wg *sync.WaitGroup) {
@@ -252,7 +264,22 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 	retriesNon2xx, _ := int32Value(opts.Get(optRetriesNon2xx))
 	retriesError, _ := int32Value(opts.Get(optRetriesError))
 
+	const maxRetryDelay = time.Second
+	retryDelay := 100 * time.Millisecond
+	raiseRetryDelay := func() {
+		retryDelay = 2 * retryDelay
+		if retryDelay > maxRetryDelay {
+			retryDelay = maxRetryDelay
+		}
+	}
+
 	for {
+		if opts.Has(optAntiCaching) {
+			query := proxyReq.URL.Query()
+			query.Set("__t", strconv.FormatInt(time.Now().UnixNano(), 10))
+			proxyReq.URL.RawQuery = query.Encode()
+		}
+
 		resp, err := cli.Do(proxyReq)
 		if err != nil {
 			log.Printf("[ERR] do request failed, url: %s, err: %s", proxyReq.URL.String(), err)
@@ -264,7 +291,8 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 					proxyReq.URL.String(), err, retriesError)
 			}
 			retriesError--
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(retryDelay)
+			raiseRetryDelay()
 			continue
 		}
 		if resp.StatusCode >= 100 && resp.StatusCode < 400 {
@@ -286,8 +314,14 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 				log.Printf("[DBG] url: %s, status code: %d. retry for non-2xx, remaining retries: %d",
 					proxyReq.URL.String(), resp.StatusCode, retriesNon2xx)
 			}
+			if _, err := io.Copy(ioutil.Discard, resp.Body); err != nil {
+				log.Printf("[ERR] discard response body failed, err: %s", err)
+				return resp, err
+			}
+			resp.Body.Close()
 			retriesNon2xx--
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(retryDelay)
+			raiseRetryDelay()
 			continue
 		}
 	}
@@ -315,7 +349,7 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	// there is no parameter or path for CONNECT request,
 	// so empty options just fine.
 	opts := url.Values{}
-	d, _ := getDialer(opts)
+	d, _, _ := getDialer(opts)
 	conn, err := d.DialContext(req.Context(), "tcp", req.URL.Host)
 	if err != nil {
 		log.Printf("[ERR] dial to %s failed, err: %s", req.URL.Host, err)
