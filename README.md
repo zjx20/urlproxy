@@ -24,6 +24,8 @@ $ ./urlproxy -h
 Usage of ./urlproxy:
   -bind string
     	Address to bind (default "0.0.0.0:8765")
+  -debug
+    	Verbose logs
   -socks string
     	Upstream socks5 proxy, e.g. 127.0.0.1:1080
   -socks-uds string
@@ -102,6 +104,24 @@ There are some special url parameters that can further control the proxy behavio
 
     ```shell
     $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptIp=3.229.200.44"
+    ```
+
+* `urlproxyOptTimeoutMs`: specify timeout for this request, the time is including internal retries.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/delay/5?urlproxyOptTimeoutMs=1000"
+    ```
+
+* `urlproxyOptRetriesNon2xx`: number of retries for non-2xx response. Note that it only supports retries for requests that use the `GET`, `HEAD`, `OPTIONS` or `TRACE` methods.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/status/500?urlproxyOptRetriesNon2xx=3"
+    ```
+
+* `urlproxyOptRetriesError`: number of retries for errors (e.g. connection timeout).
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org:1234/get?urlproxyOptRetriesError=3"
     ```
 
 ### Alternate Url Pattern

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,15 +25,19 @@ var (
 	socks    = flag.String("socks", "", "Upstream socks5 proxy, e.g. 127.0.0.1:1080")
 	socksUds = flag.String("socks-uds", "", "Path of unix domain socket for upstream socks5 proxy")
 	bind     = flag.String("bind", "0.0.0.0:8765", "Address to bind")
+	debug    = flag.Bool("debug", false, "Verbose logs")
 )
 
 const (
-	optPrefix = "urlproxyOpt"
-	optHeader = optPrefix + "Header"
-	optSchema = optPrefix + "Schema"
-	optSocks  = optPrefix + "Socks"
-	optDns    = optPrefix + "Dns"
-	optIp     = optPrefix + "Ip"
+	optPrefix        = "urlproxyOpt"
+	optHeader        = optPrefix + "Header"
+	optSchema        = optPrefix + "Schema"
+	optSocks         = optPrefix + "Socks"
+	optDns           = optPrefix + "Dns"
+	optIp            = optPrefix + "Ip"
+	optTimeoutMs     = optPrefix + "TimeoutMs"
+	optRetriesNon2xx = optPrefix + "RetriesNon2xx"
+	optRetriesError  = optPrefix + "RetriesError"
 )
 
 var (
@@ -138,6 +143,14 @@ func forward(from, to *connEx, wg *sync.WaitGroup) {
 	wg.Done()
 }
 
+func int32Value(v string) (int, bool) {
+	i, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int(i), true
+}
+
 func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Values, err error) {
 	reqSign := instUUID + "|" + req.URL.String()
 	for _, origin := range req.Header[headerOrigin] {
@@ -227,7 +240,57 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 		proxyReq.Header.Set(parts[0], strings.TrimLeftFunc(parts[1], unicode.IsSpace))
 	}
 
+	if *debug {
+		log.Printf("[DBG] proxyReq: %+v", proxyReq)
+	}
+
 	return
+}
+
+func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) {
+	cli := getHttpCli(opts)
+	retriesNon2xx, _ := int32Value(opts.Get(optRetriesNon2xx))
+	retriesError, _ := int32Value(opts.Get(optRetriesError))
+
+	for {
+		resp, err := cli.Do(proxyReq)
+		if err != nil {
+			log.Printf("[ERR] do request failed, url: %s, err: %s", proxyReq.URL.String(), err)
+			if retriesError == 0 {
+				return nil, err
+			}
+			if *debug {
+				log.Printf("[DBG] url: %s, err: %s. retry for errors, remaining retries: %d",
+					proxyReq.URL.String(), err, retriesError)
+			}
+			retriesError--
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if resp.StatusCode >= 100 && resp.StatusCode < 400 {
+			// success
+			return resp, nil
+		} else {
+			// retry non-2xx only for GET, HEAD, OPTIONS and TRACE.
+			// there maybe a request body for other methods, but the body
+			// object from the original request has been closed by the last
+			// time of requesting.
+			if retriesNon2xx == 0 ||
+				(proxyReq.Method != http.MethodGet &&
+					proxyReq.Method != http.MethodHead &&
+					proxyReq.Method != http.MethodOptions &&
+					proxyReq.Method != http.MethodTrace) {
+				return resp, nil
+			}
+			if *debug {
+				log.Printf("[DBG] url: %s, status code: %d. retry for non-2xx, remaining retries: %d",
+					proxyReq.URL.String(), resp.StatusCode, retriesNon2xx)
+			}
+			retriesNon2xx--
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+	}
 }
 
 func forwardResponse(w http.ResponseWriter, proxyResp *http.Response) {
@@ -255,7 +318,7 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	d, _ := getDialer(opts)
 	conn, err := d.DialContext(req.Context(), "tcp", req.URL.Host)
 	if err != nil {
-		log.Printf("ERR: dial to %s failed, err: %s", req.URL.Host, err)
+		log.Printf("[ERR] dial to %s failed, err: %s", req.URL.Host, err)
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(err.Error()))
 		return
@@ -263,7 +326,7 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	defer conn.Close()
 	inConn, bufrw, err := w.(http.Hijacker).Hijack()
 	if err != nil {
-		log.Printf("ERR: hijack failed, err: %s", err)
+		log.Printf("[ERR] hijack failed, err: %s", err)
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(err.Error()))
 		return
@@ -303,15 +366,21 @@ func httpProxyHandler(w http.ResponseWriter, req *http.Request) {
 
 	proxyReq, opts, err := prepareProxyRequest(req)
 	if err != nil {
-		log.Printf("ERR: %s", err)
+		log.Printf("[ERR] prepare proxy request failed, err: %s", err)
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
 		return
 	}
 
-	proxyResp, err := getHttpCli(opts).Do(proxyReq)
+	if timeoutMs, ok := int32Value(opts.Get(optTimeoutMs)); ok {
+		var ctx context.Context
+		ctx, cancel := context.WithTimeout(req.Context(), time.Duration(timeoutMs)*time.Millisecond)
+		proxyReq = proxyReq.WithContext(ctx)
+		defer cancel()
+	}
+
+	proxyResp, err := doRequest(proxyReq, opts)
 	if err != nil {
-		log.Printf("ERR: %s", err)
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(err.Error()))
 		return
@@ -324,10 +393,10 @@ func main() {
 	flag.Parse()
 	ln, err := net.Listen("tcp", *bind)
 	if err != nil {
-		log.Fatalf("listen to %s failed, err: %v", *bind, err)
+		log.Fatalf("[FATAL] listen to %s failed, err: %v", *bind, err)
 		return
 	}
-	log.Printf("Listen to %s", ln.Addr().String())
+	log.Printf("[INF] listen to %s", ln.Addr().String())
 	http.Serve(ln, http.HandlerFunc(httpProxyHandler))
-	log.Printf("exit")
+	log.Printf("[INF] exit")
 }
