@@ -40,6 +40,11 @@ const (
 	optRetriesNon2xx = optPrefix + "RetriesNon2xx"
 	optRetriesError  = optPrefix + "RetriesError"
 	optAntiCaching   = optPrefix + "AntiCaching"
+	optRaceMode      = optPrefix + "RaceMode"
+)
+
+const (
+	maxParallelism = 5
 )
 
 var (
@@ -125,9 +130,9 @@ func getDialer(opts url.Values) (dialer, string, bool) {
 	}
 }
 
-func getHttpCli(opts url.Values) *http.Client {
+func getHttpCli(opts url.Values, reusable bool) *http.Client {
 	d, identifier, socksed := getDialer(opts)
-	if cli, ok := clientPool.Load(identifier); ok {
+	if cli, ok := clientPool.Load(identifier); ok && reusable {
 		return cli.(*http.Client)
 	}
 	// same as http.DefaultTransport
@@ -144,7 +149,9 @@ func getHttpCli(opts url.Values) *http.Client {
 		transport.Proxy = nil // uses dialer's proxy
 	}
 	cli := &http.Client{Transport: transport}
-	clientPool.Store(identifier, cli)
+	if reusable {
+		clientPool.Store(identifier, cli)
+	}
 	return cli
 }
 
@@ -161,6 +168,17 @@ func int32Value(v string) (int, bool) {
 		return 0, false
 	}
 	return int(i), true
+}
+
+func isSafeMethod(method string) bool {
+	return method == http.MethodGet ||
+		method == http.MethodHead ||
+		method == http.MethodOptions ||
+		method == http.MethodTrace
+}
+
+func goodStatusCode(statusCode int) bool {
+	return statusCode >= 100 && statusCode < 400
 }
 
 func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Values, err error) {
@@ -260,7 +278,76 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 }
 
 func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) {
-	cli := getHttpCli(opts)
+	parallelism, _ := int32Value(opts.Get(optRaceMode))
+	if parallelism > maxParallelism {
+		parallelism = maxParallelism
+	}
+	if parallelism > 1 && isSafeMethod(proxyReq.Method) {
+		type result struct {
+			resp *http.Response
+			err  error
+			idx  int
+		}
+		ch := make(chan result, parallelism)
+		var cancels []context.CancelFunc
+		for i := 0; i < parallelism; i++ {
+			cli := getHttpCli(opts, false)
+			ctx, cancel := context.WithCancel(proxyReq.Context())
+			req := proxyReq.WithContext(ctx)
+			cancels = append(cancels, cancel)
+			go func(i int) {
+				if *debug {
+					log.Printf("[DBG] [RACE] doing concurrent request, idx: %d", i)
+				}
+				resp, err := doRequestSerial(cli, req, opts)
+				ch <- result{resp, err, i}
+			}(i)
+		}
+		var lastResp *http.Response
+		var lastErr error
+		var lastIdx int = -1
+		defer func() {
+			for i, c := range cancels {
+				if lastIdx != i {
+					c()
+				}
+			}
+		}()
+		count := parallelism
+		for count > 0 {
+			select {
+			case <-proxyReq.Context().Done():
+				log.Printf("[ERR] [RACE] request context done, url: %s, err: %s",
+					proxyReq.URL.String(), proxyReq.Context().Err())
+				lastErr = proxyReq.Context().Err()
+				count = 0 // break for loop
+			case r := <-ch:
+				lastResp = r.resp
+				lastErr = r.err
+				lastIdx = r.idx
+				if r.err == nil && goodStatusCode(r.resp.StatusCode) {
+					log.Printf("[DBG] [RACE] got final response")
+					return r.resp, r.err
+				}
+				if *debug {
+					statusCode := 0
+					if r.resp != nil {
+						statusCode = r.resp.StatusCode
+					}
+					log.Printf("[DBG] [RACE] got bad response, status code: %d, err: %v",
+						statusCode, r.err)
+				}
+				count--
+			}
+		}
+		return lastResp, lastErr
+	} else {
+		cli := getHttpCli(opts, true)
+		return doRequestSerial(cli, proxyReq, opts)
+	}
+}
+
+func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts url.Values) (*http.Response, error) {
 	retriesNon2xx, _ := int32Value(opts.Get(optRetriesNon2xx))
 	retriesError, _ := int32Value(opts.Get(optRetriesError))
 
@@ -295,7 +382,7 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 			raiseRetryDelay()
 			continue
 		}
-		if resp.StatusCode >= 100 && resp.StatusCode < 400 {
+		if goodStatusCode(resp.StatusCode) {
 			// success
 			return resp, nil
 		} else {
@@ -303,11 +390,7 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 			// there maybe a request body for other methods, but the body
 			// object from the original request has been closed by the last
 			// time of requesting.
-			if retriesNon2xx == 0 ||
-				(proxyReq.Method != http.MethodGet &&
-					proxyReq.Method != http.MethodHead &&
-					proxyReq.Method != http.MethodOptions &&
-					proxyReq.Method != http.MethodTrace) {
+			if retriesNon2xx == 0 || !isSafeMethod(proxyReq.Method) {
 				return resp, nil
 			}
 			if *debug {

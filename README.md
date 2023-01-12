@@ -130,6 +130,12 @@ There are some special url parameters that can further control the proxy behavio
     $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptAntiCaching=true"
     ```
 
+* `urlproxyOptRaceMode`: in race mode, urlproxy will simultaneously send several identical requests to the target server, and the first response will be used to reply to the client. The value of this parameter is a number that indicates the parallelism of the request and takes a maximum value of 5. Similar to `urlproxyOptRetriesNon2xx`, only certain http methods can use this mode.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptRaceMode=2"
+    ```
+
 ### Alternate Url Pattern
 
 Control parameters can be placed in path in addition to the url parameter. This can be useful in some cases.
