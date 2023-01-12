@@ -89,64 +89,116 @@ type dialer interface {
 	DialContext(ctx context.Context, network, addr string) (c net.Conn, err error)
 }
 
-func getDialer(opts url.Values) (dialer, string, bool) {
-	var identifier string
-	var direct dialer = &net.Dialer{
-		Timeout:   30 * time.Second,
-		KeepAlive: 30 * time.Second,
+type dialCtxFunc func(ctx context.Context, network, addr string) (c net.Conn, err error)
+
+func getResolvedAddr(ctx context.Context, dns string, addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		log.Printf("[ERR] bad addr %s", addr)
+		return addr
 	}
+	if ip := net.ParseIP(addr); ip != nil {
+		return addr
+	}
+	addrs, err := (&net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", dns)
+		},
+	}).LookupHost(ctx, host)
+	if err != nil {
+		log.Printf("[ERR] resolve via custom DNS(%s) failed, err: %s", dns, err)
+	} else {
+		if len(addrs) == 0 {
+			log.Printf("[ERR] resolve result for host(%s) is empty", host)
+		} else {
+			if *debug {
+				log.Printf("[DBG] resolve results for host(%s): %q", host, addrs)
+			}
+			return net.JoinHostPort(addrs[0], port)
+		}
+	}
+	return addr
+}
+
+func getDialer(opts url.Values) (dialCtxFunc, string) {
+	var identifier string
+
+	var pd proxy.Dialer
+	if opts.Has(optSocks) {
+		socksAddr := opts.Get(optSocks)
+		if socksAddr == "" || socksAddr == "off" {
+			// optSocks == "" or "off" means user wants to disable socks proxying
+		} else {
+			identifier += "[socks:" + socksAddr + "]"
+			pd, _ = proxy.SOCKS5("tcp", socksAddr, nil, nil)
+		}
+	} else {
+		if *socks != "" {
+			identifier += "[socks:" + *socks + "]"
+			pd, _ = proxy.SOCKS5("tcp", *socks, nil, nil)
+		} else if *socksUds != "" {
+			identifier += "[socks-uds:" + *socksUds + "]"
+			pd, _ = proxy.SOCKS5("unix", *socksUds, nil, nil)
+		}
+	}
+
+	var fn dialCtxFunc
+	if pd == nil {
+		d := &net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+		fn = d.DialContext
+	} else {
+		fn = pd.(dialer).DialContext
+	}
+
 	if opts.Has(optDns) {
 		dns := opts.Get(optDns)
 		identifier += "[dns:" + dns + "]"
-		direct.(*net.Dialer).Resolver = &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "udp", dns)
-			},
+		prevFn := fn
+		fn = func(ctx context.Context, network, addr string) (c net.Conn, err error) {
+			finalAddr := getResolvedAddr(ctx, dns, addr)
+			return prevFn(ctx, network, finalAddr)
 		}
 	}
 
-	socksAddr := *socks
-	if opts.Has(optSocks) {
-		socksAddr = opts.Get(optSocks)
-		if socksAddr == "" || socksAddr == "off" {
-			// optSocks == "" or "off" means user wants to disable socks proxying
-			return direct, identifier, false
+	if opts.Has(optIp) {
+		ip := opts.Get(optIp)
+		identifier += "[ip:" + ip + "]"
+		prevFn := fn
+		fn = func(ctx context.Context, network, addr string) (c net.Conn, err error) {
+			finalAddr := addr
+			if _, port, err := net.SplitHostPort(addr); err != nil {
+				log.Printf("[ERR] bad addr %s", addr)
+			} else {
+				finalAddr = net.JoinHostPort(ip, port)
+			}
+			if *debug {
+				log.Printf("[DBG] dial to ip %s", ip)
+			}
+			return prevFn(ctx, network, finalAddr)
 		}
 	}
-	pd := proxy.FromEnvironmentUsing(direct)
-	if socksAddr != "" {
-		identifier += "[socks:" + socksAddr + "]"
-		pd, _ = proxy.SOCKS5("tcp", socksAddr, nil, direct)
-	} else if *socksUds != "" {
-		identifier += "[socks-uds:" + *socksUds + "]"
-		pd, _ = proxy.SOCKS5("unix", *socksUds, nil, direct)
-	}
-	if pd == nil {
-		return direct, identifier, false
-	} else {
-		return pd.(dialer), identifier, pd.(dialer) != direct
-	}
+
+	return fn, identifier
 }
 
 func getHttpCli(opts url.Values, reusable bool) *http.Client {
-	d, identifier, socksed := getDialer(opts)
+	dialCtxFn, identifier := getDialer(opts)
 	if cli, ok := clientPool.Load(identifier); ok && reusable {
 		return cli.(*http.Client)
 	}
 	// same as http.DefaultTransport
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           d.DialContext,
+		DialContext:           dialCtxFn,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-	}
-	if socksed {
-		transport.Proxy = nil // uses dialer's proxy
 	}
 	cli := &http.Client{Transport: transport}
 	if reusable {
@@ -231,24 +283,11 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 		}
 	}
 
-	host := proxyUrl.Host
-	if opts.Has(optIp) {
-		port := proxyUrl.Port()
-		if port != "" {
-			proxyUrl.Host = opts.Get(optIp) + ":" + port
-		} else {
-			proxyUrl.Host = opts.Get(optIp)
-		}
-	}
-
 	proxyReq, err = http.NewRequestWithContext(
 		req.Context(), req.Method, proxyUrl.String(), req.Body)
 	if err != nil {
 		return
 	}
-
-	// force set Host
-	proxyReq.Host = host
 
 	// forward headers
 	for k := range req.Header {
@@ -432,8 +471,8 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	// there is no parameter or path for CONNECT request,
 	// so empty options just fine.
 	opts := url.Values{}
-	d, _, _ := getDialer(opts)
-	conn, err := d.DialContext(req.Context(), "tcp", req.URL.Host)
+	dialCtxFn, _ := getDialer(opts)
+	conn, err := dialCtxFn(req.Context(), "tcp", req.URL.Host)
 	if err != nil {
 		log.Printf("[ERR] dial to %s failed, err: %s", req.URL.Host, err)
 		w.WriteHeader(http.StatusBadGateway)
