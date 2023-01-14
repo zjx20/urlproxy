@@ -122,7 +122,7 @@ func getResolvedAddr(ctx context.Context, dns string, addr string) string {
 	return addr
 }
 
-func getDialer(opts url.Values) (dialCtxFunc, string) {
+func getDialer(host string, opts url.Values) (dialCtxFunc, string) {
 	var identifier string
 
 	var pd proxy.Dialer
@@ -167,17 +167,14 @@ func getDialer(opts url.Values) (dialCtxFunc, string) {
 
 	if opts.Has(optIp) {
 		ip := opts.Get(optIp)
-		identifier += "[ip:" + ip + "]"
+		identifier += "[ip:" + host + ":" + ip + "]"
 		prevFn := fn
 		fn = func(ctx context.Context, network, addr string) (c net.Conn, err error) {
 			finalAddr := addr
-			if _, port, err := net.SplitHostPort(addr); err != nil {
-				log.Printf("[ERR] bad addr %s", addr)
-			} else {
-				finalAddr = net.JoinHostPort(ip, port)
-			}
-			if *debug {
-				log.Printf("[DBG] dial to ip %s", ip)
+			hostFromAddr := addr[:strings.LastIndex(addr, ":")]
+			if addr == host || hostFromAddr == host {
+				finalAddr = ip + addr[strings.LastIndex(addr, ":"):]
+				log.Printf("[INF] resolved %s to %s", addr, finalAddr)
 			}
 			return prevFn(ctx, network, finalAddr)
 		}
@@ -186,8 +183,8 @@ func getDialer(opts url.Values) (dialCtxFunc, string) {
 	return fn, identifier
 }
 
-func getHttpCli(opts url.Values, reusable bool) *http.Client {
-	dialCtxFn, identifier := getDialer(opts)
+func getHttpCli(host string, opts url.Values, reusable bool) *http.Client {
+	dialCtxFn, identifier := getDialer(host, opts)
 	if cli, ok := clientPool.Load(identifier); ok && reusable {
 		return cli.(*http.Client)
 	}
@@ -330,7 +327,7 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 		ch := make(chan result, parallelism)
 		var cancels []context.CancelFunc
 		for i := 0; i < parallelism; i++ {
-			cli := getHttpCli(opts, false)
+			cli := getHttpCli(proxyReq.Host, opts, false)
 			ctx, cancel := context.WithCancel(proxyReq.Context())
 			req := proxyReq.WithContext(ctx)
 			cancels = append(cancels, cancel)
@@ -381,7 +378,7 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 		}
 		return lastResp, lastErr
 	} else {
-		cli := getHttpCli(opts, true)
+		cli := getHttpCli(proxyReq.Host, opts, true)
 		return doRequestSerial(cli, proxyReq, opts)
 	}
 }
@@ -471,7 +468,7 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	// there is no parameter or path for CONNECT request,
 	// so empty options just fine.
 	opts := url.Values{}
-	dialCtxFn, _ := getDialer(opts)
+	dialCtxFn, _ := getDialer(req.Host, opts)
 	conn, err := dialCtxFn(req.Context(), "tcp", req.URL.Host)
 	if err != nil {
 		log.Printf("[ERR] dial to %s failed, err: %s", req.URL.Host, err)
