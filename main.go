@@ -26,6 +26,7 @@ var (
 	socks    = flag.String("socks", "", "Upstream socks5 proxy, e.g. 127.0.0.1:1080")
 	socksUds = flag.String("socks-uds", "", "Path of unix domain socket for upstream socks5 proxy")
 	bind     = flag.String("bind", "0.0.0.0:8765", "Address to bind")
+	fileRoot = flag.String("file-root", "", "Root path for file schema")
 	debug    = flag.Bool("debug", false, "Verbose logs")
 )
 
@@ -197,6 +198,9 @@ func getHttpCli(host string, opts url.Values, reusable bool) *http.Client {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+	if *fileRoot != "" {
+		transport.RegisterProtocol("file", http.NewFileTransport(http.Dir(*fileRoot)))
+	}
 	cli := &http.Client{Transport: transport}
 	if reusable {
 		clientPool.Store(identifier, cli)
@@ -277,6 +281,10 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 		proxyUrl.Scheme = "http"
 		if opts.Has(optSchema) {
 			proxyUrl.Scheme = opts.Get(optSchema)
+			if proxyUrl.Scheme == "file" {
+				proxyUrl.Path = "/" + proxyUrl.Host + proxyUrl.Path
+				proxyUrl.Host = ""
+			}
 		}
 	}
 

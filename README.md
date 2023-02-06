@@ -26,6 +26,8 @@ Usage of ./urlproxy:
     	Address to bind (default "0.0.0.0:8765")
   -debug
     	Verbose logs
+  -file-root string
+    	Root path for file schema
   -socks string
     	Upstream socks5 proxy, e.g. 127.0.0.1:1080
   -socks-uds string
@@ -67,6 +69,15 @@ There are some special url parameters that can further control the proxy behavio
         "X-Amzn-Trace-Id": "Root=1-63b853d8-2ec483150e898d8470823f62"
     }
     }
+    ```
+
+    `file` schema is also supported. But only files inside the `-file-root` folder are allowed to read. For example:
+
+    ```shell
+    $ echo hello > /tmp/hello.txt
+    $ ./urlproxy -file-root /tmp &
+    $ curl "http://localhost:8765/hello.txt?urlproxyOptSchema=file"
+    hello
     ```
 
 * `urlproxyOptHeader`: add extra headers to the proxied request.
@@ -138,7 +149,7 @@ There are some special url parameters that can further control the proxy behavio
 
 ### Alternate Url Pattern
 
-Control parameters can be placed in path in addition to the url parameter. This can be useful in some cases.
+Options can be placed in the path with the format of `/urlproxyOptXXX=XXX/`. This can be useful in some cases.
 
 ```shell
 $ curl "http://127.0.0.1:8765/urlproxyOptSchema=https/urlproxyOptHeader=User-Agent:MyClient/httpbin.org/headers"
