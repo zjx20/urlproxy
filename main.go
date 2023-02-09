@@ -282,7 +282,6 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 		if opts.Has(optSchema) {
 			proxyUrl.Scheme = opts.Get(optSchema)
 			if proxyUrl.Scheme == "file" {
-				proxyUrl.Path = "/" + proxyUrl.Host + proxyUrl.Path
 				proxyUrl.Host = ""
 			}
 		}

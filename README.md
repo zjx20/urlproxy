@@ -71,12 +71,12 @@ There are some special url parameters that can further control the proxy behavio
     }
     ```
 
-    `file` schema is also supported. But only files inside the `-file-root` folder are allowed to read. For example:
+    `file` schema is also supported. But only files inside the `-file-root` folder are allowed to read. This turns `urlproxy` into an HTTP server for hosting static files. For example:
 
     ```shell
     $ echo hello > /tmp/hello.txt
     $ ./urlproxy -file-root /tmp &
-    $ curl "http://localhost:8765/hello.txt?urlproxyOptSchema=file"
+    $ curl "http://localhost:8765/files/hello.txt?urlproxyOptSchema=file"
     hello
     ```
 
