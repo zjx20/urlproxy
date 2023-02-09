@@ -60,7 +60,6 @@ var (
 
 	// these headers may conflict with the behavior of http responser
 	donotForwardToResp = map[string]bool{
-		"Content-Length":    true,
 		"Content-Encoding":  true,
 		"Transfer-Encoding": true,
 	}
