@@ -56,10 +56,10 @@ That's it. Headers are forwarded to the target server as well, and urlproxy foll
 
 There are some special url parameters that can further control the proxy behavior.
 
-* `urlproxyOptScheme`: specify the scheme for the target URL, e.g. `https`.
+* `uOptScheme`: specify the scheme for the target URL, e.g. `https`.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/headers?urlproxyOptScheme=https"
+    $ curl "http://127.0.0.1:8765/httpbin.org/headers?uOptScheme=https"
     {
     "headers": {
         "Accept": "*/*",
@@ -76,14 +76,14 @@ There are some special url parameters that can further control the proxy behavio
     ```shell
     $ echo hello > /tmp/hello.txt
     $ ./urlproxy -file-root /tmp &
-    $ curl "http://localhost:8765/hello.txt?urlproxyOptScheme=file"
+    $ curl "http://localhost:8765/hello.txt?uOptScheme=file"
     hello
     ```
 
-* `urlproxyOptHeader`: add extra headers to the proxied request.
+* `uOptHeader`: add extra headers to the proxied request.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/headers?urlproxyOptHeader=CustomHeader1:value1&urlproxyOptHeader=CustomHeader2:value2"
+    $ curl "http://127.0.0.1:8765/httpbin.org/headers?uOptHeader=CustomHeader1:value1&uOptHeader=CustomHeader2:value2"
     {
         "headers": {
             "Accept": "*/*",
@@ -97,62 +97,62 @@ There are some special url parameters that can further control the proxy behavio
     }
     ```
 
-* `urlproxyOptSocks`: specify the upstream socks5 proxy for this request.
+* `uOptSocks`: specify the upstream socks5 proxy for this request.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptSocks=127.0.0.1:1081"
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?uOptSocks=127.0.0.1:1081"
     ```
 
-    In particular, `"urlproxyOptSocks=off"` means that this request does not use the socks proxy.
+    In particular, `"uOptSocks=off"` means that this request does not use the socks proxy.
 
-* `urlproxyOptDns`: specify the DNS server used in this request.
+* `uOptDns`: specify the DNS server used in this request.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptDns=8.8.8.8:53"
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?uOptDns=8.8.8.8:53"
     ```
 
-* `urlproxyOptIp`: specify the IP address of the target server for this request.
+* `uOptIp`: specify the IP address of the target server for this request.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptIp=3.229.200.44"
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?uOptIp=3.229.200.44"
     ```
 
-* `urlproxyOptTimeoutMs`: specify timeout for this request, the time is including internal retries.
+* `uOptTimeoutMs`: specify timeout for this request, the time is including internal retries.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/delay/5?urlproxyOptTimeoutMs=1000"
+    $ curl "http://127.0.0.1:8765/httpbin.org/delay/5?uOptTimeoutMs=1000"
     ```
 
-* `urlproxyOptRetriesNon2xx`: number of retries for non-2xx response. Note that it only supports retries for requests that use the `GET`, `HEAD`, `OPTIONS` or `TRACE` methods.
+* `uOptRetriesNon2xx`: number of retries for non-2xx response. Note that it only supports retries for requests that use the `GET`, `HEAD`, `OPTIONS` or `TRACE` methods.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/status/500?urlproxyOptRetriesNon2xx=3"
+    $ curl "http://127.0.0.1:8765/httpbin.org/status/500?uOptRetriesNon2xx=3"
     ```
 
-* `urlproxyOptRetriesError`: number of retries for errors (e.g. connection timeout).
+* `uOptRetriesError`: number of retries for errors (e.g. connection timeout).
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org:1234/get?urlproxyOptRetriesError=3"
+    $ curl "http://127.0.0.1:8765/httpbin.org:1234/get?uOptRetriesError=3"
     ```
 
-* `urlproxyOptAntiCaching`: anti-caching by adding `__t=<current time in nanoseconds>` parameter to the request URL.
+* `uOptAntiCaching`: anti-caching by adding `__t=<current time in nanoseconds>` parameter to the request URL.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptAntiCaching=true"
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?uOptAntiCaching=true"
     ```
 
-* `urlproxyOptRaceMode`: in race mode, urlproxy will simultaneously send several identical requests to the target server, and the first response will be used to reply to the client. The value of this parameter is a number that indicates the parallelism of the request and takes a maximum value of 5. Similar to `urlproxyOptRetriesNon2xx`, only certain http methods can use this mode.
+* `uOptRaceMode`: in race mode, urlproxy will simultaneously send several identical requests to the target server, and the first response will be used to reply to the client. The value of this parameter is a number that indicates the parallelism of the request and takes a maximum value of 5. Similar to `uOptRetriesNon2xx`, only certain http methods can use this mode.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/get?urlproxyOptRaceMode=2"
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?uOptRaceMode=2"
     ```
 
 ### Alternate Url Pattern
 
-Options can be placed in the path with the format of `/urlproxyOptXXX=XXX/`. This can be useful in some cases.
+Options can be placed in the path with the format of `/uOptXXX=XXX/`. This can be useful in some cases.
 
 ```shell
-$ curl "http://127.0.0.1:8765/urlproxyOptScheme=https/urlproxyOptHeader=User-Agent:MyClient/httpbin.org/headers"
+$ curl "http://127.0.0.1:8765/uOptScheme=https/uOptHeader=User-Agent:MyClient/httpbin.org/headers"
 {
   "headers": {
     "Accept": "*/*",

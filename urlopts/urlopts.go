@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	optPrefix        = "urlproxyOpt"
+	optPrefix        = "uOpt"
 	optHost          = optPrefix + "Host"
 	optHeader        = optPrefix + "Header"
 	optScheme        = optPrefix + "Scheme"
