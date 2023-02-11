@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"bufio"
@@ -26,9 +26,7 @@ import (
 var (
 	socks    = flag.String("socks", "", "Upstream socks5 proxy, e.g. 127.0.0.1:1080")
 	socksUds = flag.String("socks-uds", "", "Path of unix domain socket for upstream socks5 proxy")
-	bind     = flag.String("bind", "0.0.0.0:8765", "Address to bind")
 	fileRoot = flag.String("file-root", "", "Root path for the file scheme")
-	debug    = flag.Bool("debug", false, "Verbose logs")
 )
 
 const (
@@ -479,7 +477,7 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 
 }
 
-func httpProxyHandler(w http.ResponseWriter, req *http.Request) {
+func ProxyHandler(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodConnect {
 		handleConnectMethod(w, req)
 		return
@@ -507,17 +505,4 @@ func httpProxyHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	forwardResponse(w, proxyResp)
-}
-
-func main() {
-	flag.Parse()
-	logger.SetDebug(*debug)
-	ln, err := net.Listen("tcp", *bind)
-	if err != nil {
-		logger.Fatalf("listen to %s failed, err: %v", *bind, err)
-		return
-	}
-	logger.Infof("listen to %s", ln.Addr().String())
-	http.Serve(ln, http.HandlerFunc(httpProxyHandler))
-	logger.Infof("exit")
 }

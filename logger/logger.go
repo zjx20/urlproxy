@@ -1,25 +1,24 @@
 package logger
 
-import "log"
+import (
+	"flag"
+	"log"
+)
 
 var (
-	debug bool = false
+	debug = flag.Bool("debug", false, "Verbose logs")
 )
 
 func init() {
 	log.SetFlags(log.Lshortfile | log.LstdFlags | log.Lmicroseconds)
 }
 
-func SetDebug(v bool) {
-	debug = v
-}
-
 func IsDebug() bool {
-	return debug
+	return *debug
 }
 
 func Debugf(format string, v ...any) {
-	if debug {
+	if *debug {
 		log.Printf("[DEBUG] "+format, v...)
 	}
 }
