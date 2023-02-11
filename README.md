@@ -27,7 +27,7 @@ Usage of ./urlproxy:
   -debug
     	Verbose logs
   -file-root string
-    	Root path for file schema
+    	Root path for the file scheme
   -socks string
     	Upstream socks5 proxy, e.g. 127.0.0.1:1080
   -socks-uds string
@@ -56,10 +56,10 @@ That's it. Headers are forwarded to the target server as well, and urlproxy foll
 
 There are some special url parameters that can further control the proxy behavior.
 
-* `urlproxyOptSchema`: specify the schema for the target URL, e.g. `https`.
+* `urlproxyOptScheme`: specify the scheme for the target URL, e.g. `https`.
 
     ```shell
-    $ curl "http://127.0.0.1:8765/httpbin.org/headers?urlproxyOptSchema=https"
+    $ curl "http://127.0.0.1:8765/httpbin.org/headers?urlproxyOptScheme=https"
     {
     "headers": {
         "Accept": "*/*",
@@ -71,12 +71,12 @@ There are some special url parameters that can further control the proxy behavio
     }
     ```
 
-    `file` schema is also supported. But only files inside the `-file-root` folder are allowed to read. This turns `urlproxy` into an HTTP server for hosting static files. For example:
+    `file` scheme is also supported. But only files inside the `-file-root` folder are allowed to read. This turns `urlproxy` into an HTTP server for hosting static files. For example:
 
     ```shell
     $ echo hello > /tmp/hello.txt
     $ ./urlproxy -file-root /tmp &
-    $ curl "http://localhost:8765/files/hello.txt?urlproxyOptSchema=file"
+    $ curl "http://localhost:8765/hello.txt?urlproxyOptScheme=file"
     hello
     ```
 
@@ -152,7 +152,7 @@ There are some special url parameters that can further control the proxy behavio
 Options can be placed in the path with the format of `/urlproxyOptXXX=XXX/`. This can be useful in some cases.
 
 ```shell
-$ curl "http://127.0.0.1:8765/urlproxyOptSchema=https/urlproxyOptHeader=User-Agent:MyClient/httpbin.org/headers"
+$ curl "http://127.0.0.1:8765/urlproxyOptScheme=https/urlproxyOptHeader=User-Agent:MyClient/httpbin.org/headers"
 {
   "headers": {
     "Accept": "*/*",

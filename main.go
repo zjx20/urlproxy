@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,6 +18,8 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/zjx20/urlproxy/logger"
+	"github.com/zjx20/urlproxy/urlopts"
 	"golang.org/x/net/proxy"
 )
 
@@ -26,22 +27,8 @@ var (
 	socks    = flag.String("socks", "", "Upstream socks5 proxy, e.g. 127.0.0.1:1080")
 	socksUds = flag.String("socks-uds", "", "Path of unix domain socket for upstream socks5 proxy")
 	bind     = flag.String("bind", "0.0.0.0:8765", "Address to bind")
-	fileRoot = flag.String("file-root", "", "Root path for file schema")
+	fileRoot = flag.String("file-root", "", "Root path for the file scheme")
 	debug    = flag.Bool("debug", false, "Verbose logs")
-)
-
-const (
-	optPrefix        = "urlproxyOpt"
-	optHeader        = optPrefix + "Header"
-	optSchema        = optPrefix + "Schema"
-	optSocks         = optPrefix + "Socks"
-	optDns           = optPrefix + "Dns"
-	optIp            = optPrefix + "Ip"
-	optTimeoutMs     = optPrefix + "TimeoutMs"
-	optRetriesNon2xx = optPrefix + "RetriesNon2xx"
-	optRetriesError  = optPrefix + "RetriesError"
-	optAntiCaching   = optPrefix + "AntiCaching"
-	optRaceMode      = optPrefix + "RaceMode"
 )
 
 const (
@@ -94,7 +81,7 @@ type dialCtxFunc func(ctx context.Context, network, addr string) (c net.Conn, er
 func getResolvedAddr(ctx context.Context, dns string, addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		log.Printf("[ERR] bad addr %s", addr)
+		logger.Errorf("bad addr %s", addr)
 		return addr
 	}
 	if ip := net.ParseIP(addr); ip != nil {
@@ -108,28 +95,26 @@ func getResolvedAddr(ctx context.Context, dns string, addr string) string {
 		},
 	}).LookupHost(ctx, host)
 	if err != nil {
-		log.Printf("[ERR] resolve via custom DNS(%s) failed, err: %s", dns, err)
+		logger.Errorf("resolve via custom DNS(%s) failed, err: %s", dns, err)
 	} else {
 		if len(addrs) == 0 {
-			log.Printf("[ERR] resolve result for host(%s) is empty", host)
+			logger.Errorf("resolve result for host(%s) is empty", host)
 		} else {
-			if *debug {
-				log.Printf("[DBG] resolve results for host(%s): %q", host, addrs)
-			}
+			logger.Debugf("resolve results for host(%s): %q", host, addrs)
 			return net.JoinHostPort(addrs[0], port)
 		}
 	}
 	return addr
 }
 
-func getDialer(host string, opts url.Values) (dialCtxFunc, string) {
+func getDialer(host string, opts *urlopts.Options) (dialCtxFunc, string) {
 	var identifier string
 
 	var pd proxy.Dialer
-	if opts.Has(optSocks) {
-		socksAddr := opts.Get(optSocks)
+	if opts.Socks != nil {
+		socksAddr := *opts.Socks
 		if socksAddr == "" || socksAddr == "off" {
-			// optSocks == "" or "off" means user wants to disable socks proxying
+			// socksAddr == "" or "off" means user wants to disable socks proxying
 		} else {
 			identifier += "[socks:" + socksAddr + "]"
 			pd, _ = proxy.SOCKS5("tcp", socksAddr, nil, nil)
@@ -155,8 +140,8 @@ func getDialer(host string, opts url.Values) (dialCtxFunc, string) {
 		fn = pd.(dialer).DialContext
 	}
 
-	if opts.Has(optDns) {
-		dns := opts.Get(optDns)
+	if opts.Dns != nil {
+		dns := *opts.Dns
 		identifier += "[dns:" + dns + "]"
 		prevFn := fn
 		fn = func(ctx context.Context, network, addr string) (c net.Conn, err error) {
@@ -165,8 +150,8 @@ func getDialer(host string, opts url.Values) (dialCtxFunc, string) {
 		}
 	}
 
-	if opts.Has(optIp) {
-		ip := opts.Get(optIp)
+	if opts.Ip != nil {
+		ip := *opts.Ip
 		identifier += "[ip:" + host + ":" + ip + "]"
 		prevFn := fn
 		fn = func(ctx context.Context, network, addr string) (c net.Conn, err error) {
@@ -174,7 +159,7 @@ func getDialer(host string, opts url.Values) (dialCtxFunc, string) {
 			hostFromAddr := addr[:strings.LastIndex(addr, ":")]
 			if addr == host || hostFromAddr == host {
 				finalAddr = ip + addr[strings.LastIndex(addr, ":"):]
-				log.Printf("[INF] resolved %s to %s", addr, finalAddr)
+				logger.Infof("resolved %s to %s", addr, finalAddr)
 			}
 			return prevFn(ctx, network, finalAddr)
 		}
@@ -183,7 +168,7 @@ func getDialer(host string, opts url.Values) (dialCtxFunc, string) {
 	return fn, identifier
 }
 
-func getHttpCli(host string, opts url.Values, reusable bool) *http.Client {
+func getHttpCli(host string, opts *urlopts.Options, reusable bool) *http.Client {
 	dialCtxFn, identifier := getDialer(host, opts)
 	if cli, ok := clientPool.Load(identifier); ok && reusable {
 		return cli.(*http.Client)
@@ -214,14 +199,6 @@ func forward(from, to *connEx, wg *sync.WaitGroup) {
 	wg.Done()
 }
 
-func int32Value(v string) (int, bool) {
-	i, err := strconv.ParseInt(v, 10, 32)
-	if err != nil {
-		return 0, false
-	}
-	return int(i), true
-}
-
 func isSafeMethod(method string) bool {
 	return method == http.MethodGet ||
 		method == http.MethodHead ||
@@ -233,7 +210,14 @@ func goodStatusCode(statusCode int) bool {
 	return statusCode >= 100 && statusCode < 400
 }
 
-func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Values, err error) {
+func toVal[T int | bool](p *T, def T) T {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts *urlopts.Options, err error) {
 	reqSign := instUUID + "|" + req.URL.String()
 	for _, origin := range req.Header[headerOrigin] {
 		if origin == reqSign {
@@ -241,53 +225,39 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 			return
 		}
 	}
+	var proxyReqUrl *url.URL
+	proxyReqUrl, opts = urlopts.Extract(req.URL)
 
-	proxyUrl := *req.URL
-	query := proxyUrl.Query()
-	opts = url.Values{}
-	for k, v := range query {
-		if strings.HasPrefix(k, optPrefix) {
-			delete(query, k)
-			opts[k] = v
-		}
-	}
-	proxyUrl.RawQuery = query.Encode()
-
-	if req.URL.Scheme != "" {
+	if proxyReqUrl.Scheme != "" {
 		// it's a regular http proxy request if Scheme is not empty
 	} else {
-		path := proxyUrl.EscapedPath()
-		var filtered []string
-		for _, seg := range strings.Split(path, "/") {
-			if seg == "" {
-				continue
-			}
-			if strings.HasPrefix(seg, "urlproxyOpt") {
-				parts := append(strings.Split(seg, "="), "")
-				opts.Add(parts[0], parts[1])
-				continue
-			}
-			filtered = append(filtered, seg)
+		// update the scheme
+		if opts.Scheme != nil {
+			proxyReqUrl.Scheme = *opts.Scheme
 		}
-
-		if len(filtered) < 1 {
-			err = fmt.Errorf("path should contain target host")
-			return
-		}
-		targetHost := filtered[0]
-		proxyUrl.Host = targetHost
-		proxyUrl.Path = "/" + strings.Join(filtered[1:], "/")
-		proxyUrl.Scheme = "http"
-		if opts.Has(optSchema) {
-			proxyUrl.Scheme = opts.Get(optSchema)
-			if proxyUrl.Scheme == "file" {
-				proxyUrl.Host = ""
+		// extract the first segment of path as host
+		if opts.Host != nil {
+			proxyReqUrl.Host = *opts.Host
+		} else if proxyReqUrl.Scheme != "file" {
+			path := proxyReqUrl.RawPath
+			if path == "" {
+				path = proxyReqUrl.Path
 			}
+			start := 0
+			if strings.HasPrefix(path, "/") {
+				start = 1
+			}
+			pos := strings.IndexByte(path[start:], '/') + start
+			if pos <= start {
+				err = fmt.Errorf("path should contain at least one segment")
+				return
+			}
+			proxyReqUrl.Host = path[start:pos]
 		}
 	}
 
 	proxyReq, err = http.NewRequestWithContext(
-		req.Context(), req.Method, proxyUrl.String(), req.Body)
+		req.Context(), req.Method, proxyReqUrl.String(), req.Body)
 	if err != nil {
 		return
 	}
@@ -304,7 +274,7 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 	proxyReq.Header.Add(headerOrigin, reqSign)
 
 	// add custom headers
-	for _, header := range opts[optHeader] {
+	for _, header := range opts.Headers {
 		if header == "" {
 			continue
 		}
@@ -312,15 +282,13 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts url.Va
 		proxyReq.Header.Set(parts[0], strings.TrimLeftFunc(parts[1], unicode.IsSpace))
 	}
 
-	if *debug {
-		log.Printf("[DBG] proxyReq: %+v", proxyReq)
-	}
+	logger.Debugf("proxyReq: %+v", proxyReq)
 
 	return
 }
 
-func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) {
-	parallelism, _ := int32Value(opts.Get(optRaceMode))
+func doRequest(proxyReq *http.Request, opts *urlopts.Options) (*http.Response, error) {
+	parallelism := toVal(opts.RaceMode, 0)
 	if parallelism > maxParallelism {
 		parallelism = maxParallelism
 	}
@@ -338,9 +306,7 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 			req := proxyReq.WithContext(ctx)
 			cancels = append(cancels, cancel)
 			go func(i int) {
-				if *debug {
-					log.Printf("[DBG] [RACE] doing concurrent request, idx: %d", i)
-				}
+				logger.Debugf("[RACE] doing concurrent request, idx: %d", i)
 				resp, err := doRequestSerial(cli, req, opts)
 				ch <- result{resp, err, i}
 			}(i)
@@ -359,7 +325,7 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 		for count > 0 {
 			select {
 			case <-proxyReq.Context().Done():
-				log.Printf("[ERR] [RACE] request context done, url: %s, err: %s",
+				logger.Errorf("[RACE] request context done, url: %s, err: %s",
 					proxyReq.URL.String(), proxyReq.Context().Err())
 				lastErr = proxyReq.Context().Err()
 				count = 0 // break for loop
@@ -368,15 +334,15 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 				lastErr = r.err
 				lastIdx = r.idx
 				if r.err == nil && goodStatusCode(r.resp.StatusCode) {
-					log.Printf("[DBG] [RACE] got final response")
+					logger.Debugf("[RACE] got final response")
 					return r.resp, r.err
 				}
-				if *debug {
+				if logger.IsDebug() {
 					statusCode := 0
 					if r.resp != nil {
 						statusCode = r.resp.StatusCode
 					}
-					log.Printf("[DBG] [RACE] got bad response, status code: %d, err: %v",
+					logger.Debugf("[RACE] got bad response, status code: %d, err: %v",
 						statusCode, r.err)
 				}
 				count--
@@ -389,9 +355,9 @@ func doRequest(proxyReq *http.Request, opts url.Values) (*http.Response, error) 
 	}
 }
 
-func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts url.Values) (*http.Response, error) {
-	retriesNon2xx, _ := int32Value(opts.Get(optRetriesNon2xx))
-	retriesError, _ := int32Value(opts.Get(optRetriesError))
+func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Options) (*http.Response, error) {
+	retriesNon2xx := toVal(opts.RetriesNon2xx, 0)
+	retriesError := toVal(opts.RetriesError, 0)
 
 	const maxRetryDelay = time.Second
 	retryDelay := 100 * time.Millisecond
@@ -403,7 +369,7 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts url.Values) 
 	}
 
 	for {
-		if opts.Has(optAntiCaching) {
+		if toVal(opts.AntiCaching, false) {
 			query := proxyReq.URL.Query()
 			query.Set("__t", strconv.FormatInt(time.Now().UnixNano(), 10))
 			proxyReq.URL.RawQuery = query.Encode()
@@ -411,14 +377,12 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts url.Values) 
 
 		resp, err := cli.Do(proxyReq)
 		if err != nil {
-			log.Printf("[ERR] do request failed, url: %s, err: %s", proxyReq.URL.String(), err)
+			logger.Errorf("do request failed, url: %s, err: %s", proxyReq.URL.String(), err)
 			if retriesError == 0 {
 				return nil, err
 			}
-			if *debug {
-				log.Printf("[DBG] url: %s, err: %s. retry for errors, remaining retries: %d",
-					proxyReq.URL.String(), err, retriesError)
-			}
+			logger.Debugf("url: %s, err: %s. retry for errors, remaining retries: %d",
+				proxyReq.URL.String(), err, retriesError)
 			retriesError--
 			time.Sleep(retryDelay)
 			raiseRetryDelay()
@@ -435,12 +399,10 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts url.Values) 
 			if retriesNon2xx == 0 || !isSafeMethod(proxyReq.Method) {
 				return resp, nil
 			}
-			if *debug {
-				log.Printf("[DBG] url: %s, status code: %d. retry for non-2xx, remaining retries: %d",
-					proxyReq.URL.String(), resp.StatusCode, retriesNon2xx)
-			}
+			logger.Debugf("url: %s, status code: %d. retry for non-2xx, remaining retries: %d",
+				proxyReq.URL.String(), resp.StatusCode, retriesNon2xx)
 			if _, err := io.Copy(ioutil.Discard, resp.Body); err != nil {
-				log.Printf("[ERR] discard response body failed, err: %s", err)
+				logger.Errorf("discard response body failed, err: %s", err)
 				return resp, err
 			}
 			resp.Body.Close()
@@ -473,11 +435,11 @@ func forwardResponse(w http.ResponseWriter, proxyResp *http.Response) {
 func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	// there is no parameter or path for CONNECT request,
 	// so empty options just fine.
-	opts := url.Values{}
-	dialCtxFn, _ := getDialer(req.Host, opts)
+	opts := urlopts.Options{}
+	dialCtxFn, _ := getDialer(req.Host, &opts)
 	conn, err := dialCtxFn(req.Context(), "tcp", req.URL.Host)
 	if err != nil {
-		log.Printf("[ERR] dial to %s failed, err: %s", req.URL.Host, err)
+		logger.Errorf("dial to %s failed, err: %s", req.URL.Host, err)
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(err.Error()))
 		return
@@ -485,7 +447,7 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	defer conn.Close()
 	inConn, bufrw, err := w.(http.Hijacker).Hijack()
 	if err != nil {
-		log.Printf("[ERR] hijack failed, err: %s", err)
+		logger.Errorf("hijack failed, err: %s", err)
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(err.Error()))
 		return
@@ -502,7 +464,7 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	if _, ok := conn.(*net.TCPConn); !ok {
 		// assuming it's a socks.Conn object,
 		// it doesn't implement CloseRead()/CloseWrite().
-		// overcome by using its underlay net.TCPConn.
+		// overcome by using its underlying net.TCPConn.
 		// ref: https://pkg.go.dev/golang.org/x/net@v0.5.0/internal/socks#Conn
 		conn = reflect.ValueOf(conn).Elem().FieldByName("Conn").Interface().(net.Conn)
 	}
@@ -525,13 +487,13 @@ func httpProxyHandler(w http.ResponseWriter, req *http.Request) {
 
 	proxyReq, opts, err := prepareProxyRequest(req)
 	if err != nil {
-		log.Printf("[ERR] prepare proxy request failed, err: %s", err)
+		logger.Errorf("prepare proxy request failed, err: %s", err)
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
 		return
 	}
 
-	if timeoutMs, ok := int32Value(opts.Get(optTimeoutMs)); ok {
+	if timeoutMs := toVal(opts.TimeoutMs, 0); timeoutMs > 0 {
 		var ctx context.Context
 		ctx, cancel := context.WithTimeout(req.Context(), time.Duration(timeoutMs)*time.Millisecond)
 		proxyReq = proxyReq.WithContext(ctx)
@@ -548,14 +510,14 @@ func httpProxyHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
-	log.SetFlags(log.Lshortfile | log.LstdFlags | log.Lmicroseconds)
 	flag.Parse()
+	logger.SetDebug(*debug)
 	ln, err := net.Listen("tcp", *bind)
 	if err != nil {
-		log.Fatalf("[FATAL] listen to %s failed, err: %v", *bind, err)
+		logger.Fatalf("listen to %s failed, err: %v", *bind, err)
 		return
 	}
-	log.Printf("[INF] listen to %s", ln.Addr().String())
+	logger.Infof("listen to %s", ln.Addr().String())
 	http.Serve(ln, http.HandlerFunc(httpProxyHandler))
-	log.Printf("[INF] exit")
+	logger.Infof("exit")
 }
