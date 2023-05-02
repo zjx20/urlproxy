@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/zjx20/urlproxy/handler"
+	"github.com/zjx20/urlproxy/hlsboost"
 	"github.com/zjx20/urlproxy/logger"
 	"github.com/zjx20/urlproxy/proxy"
 )
@@ -21,6 +23,9 @@ func main() {
 		return
 	}
 	logger.Infof("listen to %s", ln.Addr().String())
-	http.Serve(ln, http.HandlerFunc(proxy.ProxyHandler))
+	selfCli := hlsboost.NewSelfClient("http", ln.Addr().String())
+	handler.Register(hlsboost.Handler(selfCli))
+	handler.Register(proxy.Handle)
+	http.Serve(ln, http.HandlerFunc(handler.ServeHTTP))
 	logger.Infof("exit")
 }

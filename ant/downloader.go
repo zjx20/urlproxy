@@ -95,12 +95,12 @@ func (d *Downloader) Start() error {
 	d.status = Started
 	dir := path.Dir(d.save)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		d.finish(true)
+		d.finish(fmt.Errorf("os.MkdirAll(%s) failed: %v", dir, err))
 		return err
 	}
 	f, err := os.OpenFile(d.save, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		d.finish(true)
+		d.finish(fmt.Errorf("os.OpenFile(%s) failed: %v", d.save, err))
 		return err
 	}
 	d.f = f
@@ -109,7 +109,7 @@ func (d *Downloader) Start() error {
 }
 
 func (d *Downloader) Destroy() {
-	d.finish(true)
+	d.finish(fmt.Errorf("destroyed"))
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.f.Close()
@@ -156,7 +156,7 @@ func (d *Downloader) notifyCompletionLocked() {
 	d.completionWaiters = nil
 }
 
-func (d *Downloader) finish(abort bool) {
+func (d *Downloader) finish(err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.stopped {
@@ -167,7 +167,9 @@ func (d *Downloader) finish(abort bool) {
 	}
 	switch d.status {
 	case NotStarted, Started, Downloading:
-		if abort {
+		if err != nil {
+			logger.Errorf("[ant] downloader for %s aborted with error: %s",
+				d.url, err)
 			d.status = Aborted
 		} else {
 			d.status = Completed
@@ -224,17 +226,13 @@ func (d *Downloader) brain() {
 					if ev.probing {
 						break
 					}
-					if !multiThreads {
-						d.finish(true)
-						return
-					}
 					if !ev.temporary {
-						d.finish(true)
+						d.finish(fmt.Errorf("download %s failed: %v", d.url, ev.err))
 						return
 					} else {
 						tolerance--
 						if tolerance < 0 {
-							d.finish(true)
+							d.finish(fmt.Errorf("download %s failed: %v", d.url, ev.err))
 							return
 						}
 						// TODO: skip downloaded range
@@ -250,9 +248,8 @@ func (d *Downloader) brain() {
 					d.mu.Unlock()
 					if !(downloaded.begin == ev.reqRange.begin &&
 						downloaded.end >= ev.reqRange.end) {
-						logger.Errorf("downloaded range %+v doesn't cover %+v",
-							downloaded, ev.reqRange)
-						d.finish(true)
+						d.finish(fmt.Errorf("downloaded range %+v doesn't cover %+v",
+							downloaded, ev.reqRange))
 						return
 					}
 				}
@@ -293,7 +290,7 @@ func (d *Downloader) brain() {
 		}
 		if runnings == 0 {
 			logger.Infof("[ant] download %s finished", d.url)
-			d.finish(false)
+			d.finish(nil)
 			return
 		}
 	}
@@ -362,7 +359,12 @@ func (d *Downloader) download(probing bool, r dataRange) {
 
 	if !(resp.StatusCode >= 200 && resp.StatusCode < 300) {
 		err := fmt.Errorf("bad http code: %d", resp.StatusCode)
-		feedback(err, false)
+		temporary := false
+		// we may get 404 if the file has not been pushed to the CDN
+		if resp.StatusCode == 404 {
+			temporary = true
+		}
+		feedback(err, temporary)
 		return
 	}
 	offset := int64(0)
@@ -403,8 +405,8 @@ func (d *Downloader) download(probing bool, r dataRange) {
 		if n > 0 {
 			werr := d.writeAt(buf[:n], offset)
 			if werr != nil {
-				logger.Errorf("write to file err: %s, offset: %d", werr, offset)
-				d.finish(true)
+				d.finish(fmt.Errorf("write to file err: %s, offset: %d",
+					werr, offset))
 				return
 			}
 			offset += int64(n)

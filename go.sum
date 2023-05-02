@@ -1,4 +1,16 @@
+github.com/AlekSi/pointer v1.0.0/go.mod h1:1kjywbfcPFCmncIxtk6fIEub6LKrfMz3gc5QKVOSOA8=
+github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/google/uuid v1.3.0 h1:t6JiXgmwXMjEs8VusXIJk2BXHsn+wx8BZdTaoZ5fu7I=
 github.com/google/uuid v1.3.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+github.com/stretchr/testify v1.3.0 h1:TivCn/peBQ7UY8ooIcPgZFpTNSz0Q2U6UrFlUfqbe0Q=
+github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
+github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d h1:XQyeLr7N9iY9mi+TGgsBFkj54+j3fdoo8e2u6zrGP5A=
+github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d/go.mod h1:hoMeDjlNXTNqVwrCk8YDyaBS2g5vFfEX2ezMi4vb6CY=
+github.com/zjx20/go-m3u8 v1.0.1-0.20230502061040-54ef0d2790f0 h1:8w+00Z5md13Ty4+y+/SS4WtI/50FVZXn136E/ryK4ec=
+github.com/zjx20/go-m3u8 v1.0.1-0.20230502061040-54ef0d2790f0/go.mod h1:RzDiaXgaYnIEzZUmVUD/xMRFR7bY7U5JaCnp8XYLmXU=
 golang.org/x/net v0.5.0 h1:GyT4nK/YDHSqa1c4753ouYCDajOYKTja9Xb/OHtgvSw=
 golang.org/x/net v0.5.0/go.mod h1:DivGGAXEgPSlEBzxGzZI+ZLohi+xUj054jfeKui00ws=

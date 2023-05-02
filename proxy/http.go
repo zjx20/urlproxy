@@ -9,7 +9,6 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
-	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -208,14 +207,7 @@ func goodStatusCode(statusCode int) bool {
 	return statusCode >= 100 && statusCode < 400
 }
 
-func toVal[T int | bool](p *T, def T) T {
-	if p == nil {
-		return def
-	}
-	return *p
-}
-
-func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts *urlopts.Options, err error) {
+func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *http.Request, err error) {
 	reqSign := instUUID + "|" + req.URL.String()
 	for _, origin := range req.Header[headerOrigin] {
 		if origin == reqSign {
@@ -223,34 +215,23 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts *urlop
 			return
 		}
 	}
-	var proxyReqUrl *url.URL
-	proxyReqUrl, opts = urlopts.Extract(req.URL)
+	proxyReqUrl := *req.URL
 
 	if proxyReqUrl.Scheme != "" {
 		// it's a regular http proxy request if Scheme is not empty
 	} else {
 		// update the scheme
+		proxyReqUrl.Scheme = "http"
 		if opts.Scheme != nil {
 			proxyReqUrl.Scheme = *opts.Scheme
 		}
-		// extract the first segment of path as host
-		if opts.Host != nil {
-			proxyReqUrl.Host = *opts.Host
-		} else if proxyReqUrl.Scheme != "file" {
-			path := proxyReqUrl.RawPath
-			if path == "" {
-				path = proxyReqUrl.Path
-			}
-			start := 0
-			if strings.HasPrefix(path, "/") {
-				start = 1
-			}
-			pos := strings.IndexByte(path[start:], '/') + start
-			if pos <= start {
-				err = fmt.Errorf("path should contain at least one segment")
+		// update the host
+		if proxyReqUrl.Scheme != "file" {
+			if opts.Host == nil {
+				err = fmt.Errorf("opts.Host is nil")
 				return
 			}
-			proxyReqUrl.Host = path[start:pos]
+			proxyReqUrl.Host = *opts.Host
 		}
 	}
 
@@ -286,7 +267,7 @@ func prepareProxyRequest(req *http.Request) (proxyReq *http.Request, opts *urlop
 }
 
 func doRequest(proxyReq *http.Request, opts *urlopts.Options) (*http.Response, error) {
-	parallelism := toVal(opts.RaceMode, 0)
+	parallelism := urlopts.ToVal(opts.RaceMode, 0)
 	if parallelism > maxParallelism {
 		parallelism = maxParallelism
 	}
@@ -354,8 +335,8 @@ func doRequest(proxyReq *http.Request, opts *urlopts.Options) (*http.Response, e
 }
 
 func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Options) (*http.Response, error) {
-	retriesNon2xx := toVal(opts.RetriesNon2xx, 0)
-	retriesError := toVal(opts.RetriesError, 0)
+	retriesNon2xx := urlopts.ToVal(opts.RetriesNon2xx, 0)
+	retriesError := urlopts.ToVal(opts.RetriesError, 0)
 
 	const maxRetryDelay = time.Second
 	retryDelay := 100 * time.Millisecond
@@ -367,7 +348,7 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Opt
 	}
 
 	for {
-		if toVal(opts.AntiCaching, false) {
+		if urlopts.ToVal(opts.AntiCaching, false) {
 			query := proxyReq.URL.Query()
 			query.Set("__t", strconv.FormatInt(time.Now().UnixNano(), 10))
 			proxyReq.URL.RawQuery = query.Encode()
@@ -412,7 +393,7 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Opt
 	}
 }
 
-func forwardResponse(w http.ResponseWriter, proxyResp *http.Response) {
+func ForwardResponse(w http.ResponseWriter, proxyResp *http.Response) {
 	for k := range proxyResp.Header {
 		if _, exists := donotForwardToResp[k]; exists {
 			continue
@@ -477,21 +458,21 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 
 }
 
-func ProxyHandler(w http.ResponseWriter, req *http.Request) {
+func Handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) bool {
 	if req.Method == http.MethodConnect {
 		handleConnectMethod(w, req)
-		return
+		return true
 	}
 
-	proxyReq, opts, err := prepareProxyRequest(req)
+	proxyReq, err := prepareProxyRequest(req, opts)
 	if err != nil {
 		logger.Errorf("prepare proxy request failed, err: %s", err)
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
-		return
+		return true
 	}
 
-	if timeoutMs := toVal(opts.TimeoutMs, 0); timeoutMs > 0 {
+	if timeoutMs := urlopts.ToVal(opts.TimeoutMs, 0); timeoutMs > 0 {
 		var ctx context.Context
 		ctx, cancel := context.WithTimeout(req.Context(), time.Duration(timeoutMs)*time.Millisecond)
 		proxyReq = proxyReq.WithContext(ctx)
@@ -502,7 +483,8 @@ func ProxyHandler(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(err.Error()))
-		return
+		return true
 	}
-	forwardResponse(w, proxyResp)
+	ForwardResponse(w, proxyResp)
+	return true
 }
