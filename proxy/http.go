@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -258,7 +259,11 @@ func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *ht
 			continue
 		}
 		parts := append(strings.SplitN(header, ":", 2), "")
-		proxyReq.Header.Set(parts[0], strings.TrimLeftFunc(parts[1], unicode.IsSpace))
+		val, err := url.PathUnescape(parts[1])
+		if err != nil {
+			val = parts[1]
+		}
+		proxyReq.Header.Set(parts[0], strings.TrimLeftFunc(val, unicode.IsSpace))
 	}
 
 	logger.Debugf("proxyReq: %+v", proxyReq)
