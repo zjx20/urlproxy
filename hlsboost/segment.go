@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultPieceSize = 128 * 1024
+	defaultPieceSize = 512 * 1024
 	defaultAnts      = 5
 )
 
@@ -63,12 +63,16 @@ func (s *segment) Prefetch() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.started {
-		return false
+		// last time of downloading is failed if Retry() returns no error
+		if err := s.downloader.Retry(); err != nil {
+			return false
+		}
 	}
 	s.started = true
 	err := s.downloader.Start()
 	if err != nil {
 		logger.Errorf("prefetch segment %s failed: %v", s.segId, err)
+		return false
 	}
 	return true
 }

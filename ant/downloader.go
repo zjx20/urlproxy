@@ -23,6 +23,8 @@ var (
 	errAlreadyStarted = fmt.Errorf("already started")
 	errStopped        = fmt.Errorf("stopped")
 	errNotDownloaded  = fmt.Errorf("not downloaded")
+	errBadStatus      = fmt.Errorf("bad status")
+	errDestroyed      = fmt.Errorf("destroyed")
 
 	maxAnts = 10
 )
@@ -52,7 +54,6 @@ type Downloader struct {
 	save      string
 	f         *os.File
 
-	eventCh   chan interface{}
 	cancelCtx context.Context
 	cancel    context.CancelFunc
 	stopped   bool
@@ -71,19 +72,23 @@ func NewDownloader(pieceSize int, ants int, url string, save string) *Downloader
 	if ants > maxAnts {
 		ants = maxAnts
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	return &Downloader{
-		pieceSize:  pieceSize,
-		ants:       ants,
-		url:        url,
-		save:       save,
-		eventCh:    make(chan interface{}, 16),
-		cancelCtx:  ctx,
-		cancel:     cancel,
-		status:     NotStarted,
-		totalSize:  -1,
-		downloaded: newSpace(),
+	d := &Downloader{
+		pieceSize: pieceSize,
+		ants:      ants,
+		url:       url,
+		save:      save,
 	}
+	d.init()
+	return d
+}
+
+func (d *Downloader) init() {
+	ctx, cancel := context.WithCancel(context.Background())
+	d.cancelCtx = ctx
+	d.cancel = cancel
+	d.status = NotStarted
+	d.totalSize = -1
+	d.downloaded = newSpace()
 }
 
 func (d *Downloader) Start() error {
@@ -95,23 +100,39 @@ func (d *Downloader) Start() error {
 	d.status = Started
 	dir := path.Dir(d.save)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		d.finish(fmt.Errorf("os.MkdirAll(%s) failed: %v", dir, err))
+		d.finishLocked(fmt.Errorf("os.MkdirAll(%s) failed: %v", dir, err))
 		return err
 	}
 	f, err := os.OpenFile(d.save, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		d.finish(fmt.Errorf("os.OpenFile(%s) failed: %v", d.save, err))
+		d.finishLocked(fmt.Errorf("os.OpenFile(%s) failed: %v", d.save, err))
 		return err
 	}
 	d.f = f
-	go d.brain()
+	go d.brain(d.cancelCtx)
+	return nil
+}
+
+func (d *Downloader) Retry() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !(d.status == NotStarted || d.status == Aborted) {
+		return errBadStatus
+	}
+	d.stopped = false
+	if d.f != nil {
+		d.f.Close()
+		os.Remove(d.save)
+		d.f = nil
+	}
+	d.init()
 	return nil
 }
 
 func (d *Downloader) Destroy() {
-	d.finish(fmt.Errorf("destroyed"))
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.finishLocked(errDestroyed)
 	d.f.Close()
 	os.Remove(d.save)
 	d.status = Destroyed
@@ -159,6 +180,10 @@ func (d *Downloader) notifyCompletionLocked() {
 func (d *Downloader) finish(err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.finishLocked(err)
+}
+
+func (d *Downloader) finishLocked(err error) {
 	if !d.stopped {
 		d.cancel()
 		d.stopped = true
@@ -181,35 +206,38 @@ func (d *Downloader) finish(err error) {
 	}
 }
 
-func (d *Downloader) brain() {
+func (d *Downloader) brain(ctx context.Context) {
 	runnings := 0
 	tolerance := 0
 	multiThreads := false
 	downloadingWhole := false
 	totalSize := int64(0)
 	progress := int64(0)
+	eventCh := make(chan interface{}, 16)
 	var lastFailedRange dataRange
 
 	if d.ants > 1 {
 		// issue the probing request
 		runnings++
-		go d.download(true, dataRange{
+		go d.download(ctx, eventCh, true, dataRange{
 			begin: 0,
 			end:   int64(d.pieceSize),
 		})
 	} else {
-		d.eventCh <- &probeResultEv{
+		// drive the loop manually
+		eventCh <- &probeResultEv{
 			err: fmt.Errorf("disabled multi-threads downloading"),
 		}
 	}
 
 	for {
 		select {
-		case obj := <-d.eventCh:
+		case obj := <-eventCh:
 			// probeResultEv is guaranteed to be appeared before downloadDoneEv
 			switch ev := obj.(type) {
 			case *probeResultEv:
-				logger.Debugf("[ant] probeResultEv: %+v, err: %v", ev, ev.err)
+				logger.Debugf("[ant] url: %s probeResultEv: %+v, err: %v",
+					d.url, ev, ev.err)
 				if ev.err == nil {
 					multiThreads = true
 					tolerance = 3
@@ -220,7 +248,8 @@ func (d *Downloader) brain() {
 				d.status = Downloading
 				d.mu.Unlock()
 			case *downloadDoneEv:
-				logger.Debugf("[ant] downloadDoneEv: %+v, err: %v", ev, ev.err)
+				logger.Debugf("[ant] url: %s downloadDoneEv: %+v, err: %v",
+					d.url, ev, ev.err)
 				runnings--
 				if ev.err != nil {
 					if ev.probing {
@@ -240,23 +269,10 @@ func (d *Downloader) brain() {
 						break
 					}
 				}
-
-				// check
-				if ev.reqRange != wholeFile {
-					d.mu.Lock()
-					downloaded := d.downloaded.coveredRange(ev.reqRange.begin)
-					d.mu.Unlock()
-					if !(downloaded.begin == ev.reqRange.begin &&
-						downloaded.end >= ev.reqRange.end) {
-						d.finish(fmt.Errorf("downloaded range %+v doesn't cover %+v",
-							downloaded, ev.reqRange))
-						return
-					}
-				}
 			default:
 				logger.Errorf("unknown event: %+v", obj)
 			}
-		case <-d.cancelCtx.Done():
+		case <-ctx.Done():
 			return
 		}
 
@@ -276,7 +292,7 @@ func (d *Downloader) brain() {
 				}
 				if reqRange != zeroRange {
 					runnings++
-					go d.download(false, reqRange)
+					go d.download(ctx, eventCh, false, reqRange)
 				} else {
 					break
 				}
@@ -284,7 +300,7 @@ func (d *Downloader) brain() {
 		} else {
 			if !downloadingWhole {
 				runnings++
-				go d.download(false, wholeFile)
+				go d.download(ctx, eventCh, false, wholeFile)
 				downloadingWhole = true
 			}
 		}
@@ -310,11 +326,12 @@ func (d *Downloader) writeAt(data []byte, offset int64) error {
 	return nil
 }
 
-func (d *Downloader) download(probing bool, r dataRange) {
+func (d *Downloader) download(ctx context.Context,
+	eventCh chan interface{}, probing bool, r dataRange) {
 	sendEv := func(ev interface{}) {
 		select {
-		case d.eventCh <- ev:
-		case <-d.cancelCtx.Done():
+		case eventCh <- ev:
+		case <-ctx.Done():
 		}
 	}
 	feedback := func(err error, temporary bool) {
@@ -331,8 +348,7 @@ func (d *Downloader) download(probing bool, r dataRange) {
 			temporary: temporary,
 		})
 	}
-	req, err := http.NewRequestWithContext(d.cancelCtx,
-		http.MethodGet, d.url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
 	if err != nil {
 		logger.Errorf("new request error: %s", err)
 		feedback(err, false)

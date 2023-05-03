@@ -235,6 +235,8 @@ func (p *playlist) tryPrefetch() {
 		}
 	}
 	if fetchings >= p.maxPrefetches {
+		logger.Debugf("playlist %s has %d fetchings, max %d, skip prefetch",
+			p.id, fetchings, p.maxPrefetches)
 		return
 	}
 	var pending []*segment
@@ -246,7 +248,10 @@ func (p *playlist) tryPrefetch() {
 			p.id, pf, p.m3.Sequence, idx)
 		for (idx >= 0 && idx < sz) && dur < pf.durationSec {
 			status := p.segments[idx].Status()
-			if status == ant.NotStarted {
+			// retry for failed segments, but ignore the one is currently
+			// requested by the client (idx == 0), because it's too late
+			// to prefetch.
+			if status == ant.NotStarted || (idx > 0 && status == ant.Aborted) {
 				pending = append(pending, p.segments[idx])
 			}
 			dur += p.m3.Items[idx].(*m3u8.SegmentItem).Duration
@@ -355,6 +360,12 @@ func (p *playlist) appendItemsLocked(news []m3u8.Item) {
 		segment := newSegment(seq, segId, url, p.cacheDir, p.reqOpts)
 		p.segments = append(p.segments, segment)
 		p.m3.AppendItem(it)
+	}
+	if len(news) > 0 {
+		select {
+		case p.notifyCh <- struct{}{}:
+		default:
+		}
 	}
 }
 

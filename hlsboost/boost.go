@@ -72,6 +72,7 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 	}
 	seg.Acquire()
 	defer seg.Release()
+	logger.Debugf("serving segment %s, url: %s", seg.segId, req.URL.String())
 	segSize, _ := seg.TotalSize(req.Context()) // blocking
 	// status should be more reliable after getting total size
 	if status := seg.Status(); status == ant.Aborted || status == ant.Destroyed {

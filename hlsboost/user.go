@@ -18,10 +18,9 @@ import (
 //    certain number (e.g. five).
 // 3. Dynamically adjust prefetch duration to prevent resource waste
 //    when clients switch channels:
-//    a. For first 30 seconds: cache 5s
-//    b. For more than 30 seconds but less than one minute: cache 10s
-//    c. For more than one minute but less than five minutes: cache 20s
-//    d. For more than five minutes: cache 30s
+//    a. For first 30 seconds: cache 15s
+//    b. For more than 30 seconds but less than three minutes: cache 20s
+//    c. For more than three minutes: cache 30s
 
 type stream struct {
 	userId         string
@@ -41,10 +40,8 @@ func (s *stream) update(seq int) {
 	//   the buffer duration.
 	var prefetchDur int
 	if dur < 30*time.Second {
-		prefetchDur = 5
-	} else if dur < 1*time.Minute {
-		prefetchDur = 10
-	} else if dur < 5*time.Minute {
+		prefetchDur = 15
+	} else if dur < 3*time.Minute {
 		prefetchDur = 20
 	} else {
 		prefetchDur = 30
