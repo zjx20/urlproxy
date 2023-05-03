@@ -173,6 +173,34 @@ export http_proxy=http://127.0.0.1:8765
 curl -v http://httpbin.org/get
 ```
 
+## HLSBoost
+
+`urlproxy` can recognize HLS (HTTP Live Streaming) content and accelerate it, the technology is called `HLSBoost`. Typically, HLS players download segments in a conservative manner, such as downloading segments one by one in sequence with a single thread. In poor network conditions, this can easily lead to playback stuttering. `HLSBoost` works between the HLS player and server, intercepts and caches segment files by sniffing and hijacking the m3u8 playlist. It employs an aggressive prefetch strategy that tracks the client's playback progress to cache required content ahead of time, thereby reducing playback stuttering. Additionally, when servers have TCP connection-level speed limits, multi-threaded slicing download technology used by `HLSBoost` can effectively increase download speeds.
+
+### Usage
+
+Suppose there is an HLS playback link:
+
+```
+http://example.com/hls/index.m3u8
+```
+
+Convert it to `urlproxy` style link with `uOptHLSBoost=true` parameter included:
+
+```
+http://127.0.0.1:8765/uOptHLSBoost=true/example.com/hls/index.m3u8
+```
+
+Then give the proxied link to the player for accelerated performance!
+
+### Optional Parameters
+
+* `uOptHLSPrefetches`: Specifies the number of concurrent downloads for segments; default value is 1.
+
+* `uOptAntConcurrentPieces`: Specifies the number of threads used for multi-threaded downloads; setting this value to 1 disables multi-threaded downloads; default value is 5.
+
+* `uOptAntPieceSize`: If number of download threads are greater than 1, specifies how many bytes per thread will be downloaded at once; default value is 524288 (512KB).
+
 # License
 
 MIT
