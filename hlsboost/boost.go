@@ -86,9 +86,11 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 	if segSize > 0 {
 		logger.Debugf("segment %s, responded by ServeContent", seg.segId)
 		cont := toContent(req.Context(), seg, segSize)
+		w.Header().Add("Access-Control-Allow-Origin", "*")
 		http.ServeContent(w, req, req.URL.Path, time.Time{}, cont)
 	} else {
 		logger.Debugf("can't get size of segment %s, respond in stream", seg.segId)
+		w.Header().Add("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)
 		buf := make([]byte, 8*1024)
 		off := int64(0)
