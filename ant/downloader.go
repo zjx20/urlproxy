@@ -355,7 +355,7 @@ func (d *Downloader) download(ctx context.Context,
 		return
 	}
 	if r != wholeFile {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", r.begin, r.end))
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", r.begin, r.end-1))
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
