@@ -46,12 +46,15 @@ type waiter struct {
 	ch     chan struct{}
 }
 
+type RequestManipulator func(req *http.Request)
+
 type Downloader struct {
 	mu        sync.Mutex
 	pieceSize int
 	ants      int
 	url       string
 	save      string
+	rm        RequestManipulator
 	f         *os.File
 
 	cancelCtx context.Context
@@ -65,7 +68,8 @@ type Downloader struct {
 	completionWaiters []chan struct{}
 }
 
-func NewDownloader(pieceSize int, ants int, url string, save string) *Downloader {
+func NewDownloader(pieceSize int, ants int, url string, save string,
+	rm RequestManipulator) *Downloader {
 	if pieceSize <= 0 {
 		panic(fmt.Sprintf("pieceSize %d is invalid", pieceSize))
 	}
@@ -77,6 +81,7 @@ func NewDownloader(pieceSize int, ants int, url string, save string) *Downloader
 		ants:      ants,
 		url:       url,
 		save:      save,
+		rm:        rm,
 	}
 	d.init()
 	return d
@@ -356,6 +361,9 @@ func (d *Downloader) download(ctx context.Context,
 	}
 	if r != wholeFile {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", r.begin, r.end-1))
+	}
+	if d.rm != nil {
+		d.rm(req)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

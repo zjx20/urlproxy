@@ -135,7 +135,7 @@ func TestDownloader(t *testing.T) {
 func testDownloader(t *testing.T, pieceSize int, ants int,
 	url string, randContent []byte, knowContentLength bool) {
 	file := "./testdata/file"
-	d := NewDownloader(pieceSize, ants, url, file)
+	d := NewDownloader(pieceSize, ants, url, file, nil)
 
 	// check status
 	status, total := d.Status()

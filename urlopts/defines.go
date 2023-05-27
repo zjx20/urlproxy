@@ -28,7 +28,6 @@ var (
 	OptHLSPlaylist   = defineStringOption("HLSPlaylist") // internal
 	OptHLSUser       = defineStringOption("HLSUser")     // internal
 	OptHLSSegment    = defineStringOption("HLSSegment")  // internal
-	OptHLSSkip       = defineBoolOption("HLSSkip")       // internal
 
 	OptAntPieceSize        = defineInt64Option("AntPieceSize")
 	OptAntConcurrentPieces = defineInt64Option("AntConcurrentPieces")

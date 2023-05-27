@@ -37,7 +37,7 @@ type hlsBoost struct {
 }
 
 func (h *hlsBoost) handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) bool {
-	if skip, _ := urlopts.OptHLSSkip.ValueFrom(opts); skip {
+	if _, exists := req.Header[headerSkipHLSBoost]; exists {
 		// a request from SelfClient
 		return false
 	}
@@ -157,15 +157,15 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 		m3 := user.GetM3U8(pl)
 		if newUser {
 			// inject a user id to the playlist url
-			m3 = getVariantM3U8(req.URL.String())
+			m3 = getVariantM3U8(pl.uri)
 		}
 		logger.Debugf("user %s get playlist %s", user.id, playlistId)
-		respondRewrittenM3U8(playlistURI, m3, w, opts)
+		respondRewrittenM3U8(pl.uri, m3, w, pl.reqOpts)
 		return true
 	}
 
 	// playlist not found, sniffing the url to see if it's a m3u8
-	resp, m3, err := h.sniffing(req.Context(), playlistURI, normalizedOpts)
+	resp, m3, err := h.sniffing(req.Context(), playlistURI, opts)
 	if err != nil {
 		logger.Errorf("sniffing %s failed, err: %s, fallback to http proxy",
 			req.URL, err)
@@ -175,13 +175,22 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 		}
 		return false
 	}
+	// get final url if followed redirects
+	finalReqUrl := *resp.Request.URL
+	finalReqUrl.Host = ""
+	finalReqUrl.Scheme = ""
+	finalUrl, finalOpts := urlopts.Extract(&finalReqUrl)
+	playlistURI, opts = finalUrl.String(), finalOpts
+	logger.Debugf("sniffing %s, final url: %s, opts: %s",
+		req.URL, playlistURI, urlopts.SortedOptionPath(opts))
+
 	if isMaster(m3) {
 		// master m3u8 doesn't contain any segment
 		respondRewrittenM3U8(playlistURI, m3, w, opts)
 		return true
 	} else {
 		// create a new playlist
-		pl := newPlaylist(h.selfCli, playlistURI, normalizedOpts, 10*time.Second, *cacheDir)
+		pl := newPlaylist(h.selfCli, playlistURI, opts, 10*time.Second, *cacheDir)
 		err := pl.Init(m3)
 		if err != nil {
 			logger.Errorf("initialize playlist %s failed, err: %s", pl.id, err)
@@ -196,7 +205,7 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 
 		if newUser {
 			// inject a user id to the playlist url
-			m3 = getVariantM3U8(req.URL.String())
+			m3 = getVariantM3U8(playlistURI)
 		}
 		respondRewrittenM3U8(playlistURI, m3, w, opts)
 		return true
@@ -209,7 +218,6 @@ func normalizedOptions(opts *urlopts.Options) *urlopts.Options {
 	cloneOpts.Remove(urlopts.OptHLSPlaylist)
 	cloneOpts.Remove(urlopts.OptHLSUser)
 	cloneOpts.Remove(urlopts.OptHLSSegment)
-	cloneOpts.Remove(urlopts.OptHLSSkip)
 	return cloneOpts
 }
 
@@ -250,6 +258,8 @@ var m3u8Header = []byte("#EXTM3U")
 
 func (h *hlsBoost) sniffing(ctx context.Context, playlistURI string,
 	reqOpts *urlopts.Options) (*http.Response, *m3u8.Playlist, error) {
+	reqOpts = reqOpts.Clone()
+	reqOpts.Set(urlopts.OptRewriteRedirect.New(true))
 	resp, err := h.selfCli.Get(ctx, "/", playlistURI, reqOpts)
 	if err != nil {
 		return nil, nil, err
@@ -273,7 +283,7 @@ func (h *hlsBoost) sniffing(ctx context.Context, playlistURI string,
 		logger.Warnf("get invalid m3u8 from %s", playlistURI)
 		return nil, nil, err
 	}
-	return nil, pl, nil
+	return resp, pl, nil
 }
 
 func isValid(pl *m3u8.Playlist) error {

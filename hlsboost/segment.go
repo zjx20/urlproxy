@@ -38,7 +38,7 @@ func newSegment(seq int, segId string, url string, cacheDir string,
 		ants = defaultAnts
 	}
 	d := ant.NewDownloader(int(pieceSize), int(ants), url,
-		path.Join(cacheDir, segId))
+		path.Join(cacheDir, segId), manipulateRequestToSkipHlsBoost)
 	s := &segment{
 		seq:        seq,
 		segId:      segId,
