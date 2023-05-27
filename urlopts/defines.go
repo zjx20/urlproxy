@@ -10,17 +10,18 @@ var (
 )
 
 var (
-	OptHost          = defineStringOption("Host")
-	OptHeader        = defineHeaderOption("Header")
-	OptScheme        = defineStringOption("Scheme")
-	OptSocks         = defineStringOption("Socks")
-	OptDns           = defineStringOption("Dns")
-	OptIp            = defineStringOption("Ip")
-	OptTimeoutMs     = defineInt64Option("TimeoutMs")
-	OptRetriesNon2xx = defineInt64Option("RetriesNon2xx")
-	OptRetriesError  = defineInt64Option("RetriesError")
-	OptAntiCaching   = defineBoolOption("AntiCaching")
-	OptRaceMode      = defineInt64Option("RaceMode")
+	OptHost            = defineStringOption("Host")
+	OptHeader          = defineHeaderOption("Header")
+	OptScheme          = defineStringOption("Scheme")
+	OptSocks           = defineStringOption("Socks")
+	OptDns             = defineStringOption("Dns")
+	OptIp              = defineStringOption("Ip")
+	OptTimeoutMs       = defineInt64Option("TimeoutMs")
+	OptRetriesNon2xx   = defineInt64Option("RetriesNon2xx")
+	OptRetriesError    = defineInt64Option("RetriesError")
+	OptAntiCaching     = defineBoolOption("AntiCaching")
+	OptRaceMode        = defineInt64Option("RaceMode")
+	OptRewriteRedirect = defineBoolOption("RewriteRedirect")
 
 	OptHLSBoost      = defineBoolOption("HLSBoost")
 	OptHLSPrefetches = defineInt64Option("HLSPrefetches")
@@ -73,7 +74,7 @@ func (id *identifier[O, V]) ExistsIn(opts *Options) bool {
 
 func addDefinition[O Option, V any](name string, opt O, _ V) identifier[O, V] {
 	id := identifier[O, V]{
-		name: UrlOptionPrefix + name,
+		name: name,
 	}
 	options[id.name] = opt
 	return id

@@ -147,6 +147,12 @@ There are some special url parameters that can further control the proxy behavio
     $ curl "http://127.0.0.1:8765/httpbin.org/get?uOptRaceMode=2"
     ```
 
+* `uOptRewriteRedirect`: `urlproxy` does not automatically follow redirects (such as 301 and 302 status codes), but returns the http status code and `Location` to the client. When redirecting, the client may not send request to `urlproxy`, but directly connect to the target address. This option can rewrite the redirect, changing the `Location` to an address pointing to `urlproxy`.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/redirect-to?url=http://google.com&status_code=302&uOptRewriteRedirect=true"
+    ```
+
 ### Alternate Url Pattern
 
 Options can be placed in the path with the format of `/uOptXXX=XXX/`. This can be useful in some cases.

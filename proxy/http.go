@@ -177,7 +177,13 @@ func getHttpCli(host string, opts *urlopts.Options, reusable bool) *http.Client 
 	if *fileRoot != "" {
 		transport.RegisterProtocol("file", http.NewFileTransport(http.Dir(*fileRoot)))
 	}
-	cli := &http.Client{Transport: transport}
+	cli := &http.Client{
+		Transport: transport,
+		// no redirect
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	if reusable {
 		clientPool.Store(identifier, cli)
 	}
@@ -448,7 +454,23 @@ func handleConnectMethod(w http.ResponseWriter, req *http.Request) {
 	go forward(conn1, conn2, wg)
 	go forward(conn2, conn1, wg)
 	wg.Wait()
+}
 
+func rewriteLocation(resp *http.Response, req *http.Request, opts *urlopts.Options) {
+	if req.URL.Scheme != "" {
+		// don't rewrite location for regular proxy requests, it should
+		// be the responsibility of the client.
+		return
+	}
+	loc, err := resp.Location()
+	if err != nil {
+		return
+	}
+	logger.Debugf("location: %s", resp.Header["Location"])
+	if rewrite, _ := urlopts.OptRewriteRedirect.ValueFrom(opts); rewrite {
+		loc = urlopts.RelocateToUrlproxy(loc, opts)
+		resp.Header.Set("Location", loc.String())
+	}
 }
 
 func Handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) bool {
@@ -478,6 +500,7 @@ func Handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) boo
 		w.Write([]byte(err.Error()))
 		return true
 	}
+	rewriteLocation(proxyResp, req, opts)
 	ForwardResponse(w, proxyResp)
 	return true
 }

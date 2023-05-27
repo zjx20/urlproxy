@@ -2,6 +2,7 @@ package urlopts
 
 import (
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 
@@ -52,7 +53,7 @@ func (opts *Options) String() string {
 	return sb.String()
 }
 
-func NewOption(name string) Option {
+func newOption(name string) Option {
 	o := options[name]
 	if o == nil {
 		return nil
@@ -63,7 +64,7 @@ func NewOption(name string) Option {
 func conv(uopts url.Values) *Options {
 	opts := &Options{}
 	for k, values := range uopts {
-		opt := NewOption(k)
+		opt := newOption(k)
 		if opt == nil {
 			logger.Warnf("unknown option %s", k)
 			continue
@@ -79,36 +80,36 @@ func conv(uopts url.Values) *Options {
 			}
 		}
 		if ok {
-			opts.optMap.Store(k, opt)
+			opts.Set(opt)
 		}
 	}
 	return opts
 }
 
-func ToList(opts *Options) []string {
-	var result []string
-	opts.optMap.Range(func(key, value any) bool {
-		opt := value.(Option)
-		if !opt.IsPresent() {
-			return true
-		}
-		result = append(result, opt.ToUrlOption()...)
-		return true
-	})
-	return result
+func extractOptionName(s string) (bool, string) {
+	if strings.HasPrefix(s, UrlOptionPrefix) {
+		return true, s[len(UrlOptionPrefix):]
+	}
+	return false, s
 }
 
 func Extract(u *url.URL) (after url.URL, opts *Options) {
 	after = *u
 	query := after.Query()
 	uopts := url.Values{}
+	updated := false
 	for k, v := range query {
-		if strings.HasPrefix(k, UrlOptionPrefix) {
+		if ok, oName := extractOptionName(k); ok {
 			delete(query, k)
-			uopts[k] = v
+			uopts[oName] = v
+			updated = true
 		}
 	}
-	after.RawQuery = query.Encode()
+	// some http servers have strict request verification, and even the order
+	// of query parameters cannot be changed, so try not to modify RawQuery.
+	if updated {
+		after.RawQuery = query.Encode()
+	}
 
 	path := after.RawPath
 	if path == "" {
@@ -131,7 +132,8 @@ func Extract(u *url.URL) (after url.URL, opts *Options) {
 				}
 			}
 			if pos != -1 {
-				uopts.Add(seg[:pos], seg[next:])
+				_, oName := extractOptionName(seg[:pos])
+				uopts.Add(oName, seg[next:])
 				continue
 			}
 		}
@@ -153,4 +155,50 @@ func Extract(u *url.URL) (after url.URL, opts *Options) {
 
 	opts = conv(uopts)
 	return
+}
+
+func ToList(opts *Options) []string {
+	var result []string
+	opts.optMap.Range(func(key, value any) bool {
+		opt := value.(Option)
+		if !opt.IsPresent() {
+			return true
+		}
+		result = append(result, opt.ToUrlOption()...)
+		return true
+	})
+	return result
+}
+
+func SortedOptionPath(opts *Options) string {
+	list := ToList(opts)
+	sort.Strings(list)
+	return strings.Join(list, "/")
+}
+
+func RelocateToUrlproxy(u *url.URL, opts *Options) *url.URL {
+	cloneOpts := opts.Clone()
+
+	if u.Scheme != "" {
+		// it's an absolute url, convert it into a relative url for urlproxy
+		cloneOpts.Set(OptScheme.New(u.Scheme))
+		cloneOpts.Set(OptHost.New(u.Host))
+		optPath := SortedOptionPath(cloneOpts)
+		u.Path = "/" + optPath + u.Path
+		u.Scheme = ""
+		u.Host = ""
+	} else {
+		// it's a relative url
+		optPath := SortedOptionPath(cloneOpts)
+		if optPath != "" {
+			if strings.HasPrefix(u.Path, "/") {
+				// absolute path
+				u.Path = "/" + optPath + u.Path
+			} else {
+				// relative path
+				u.Path = optPath + "/" + u.Path
+			}
+		}
+	}
+	return u
 }

@@ -5,11 +5,21 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 
 	"github.com/zjx20/urlproxy/urlopts"
 )
+
+var cli *http.Client
+
+func init() {
+	tmp := *http.DefaultClient
+	cli = &tmp
+	// no redirect
+	cli.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+}
 
 type SelfClient struct {
 	scheme string
@@ -30,7 +40,7 @@ func (h *SelfClient) Get(ctx context.Context, relativeToPath string, uri string,
 	if err != nil {
 		return nil, err
 	}
-	return http.DefaultClient.Do(selfReq)
+	return cli.Do(selfReq)
 }
 
 func (h *SelfClient) ToFinalUrl(relativeToPath string, uri string,
@@ -41,12 +51,6 @@ func (h *SelfClient) ToFinalUrl(relativeToPath string, uri string,
 	return fmt.Sprintf("%s://%s%s", h.scheme, h.addr, path)
 }
 
-func sortedOptionPath(opts *urlopts.Options) string {
-	list := urlopts.ToList(opts)
-	sort.Strings(list)
-	return strings.Join(list, "/")
-}
-
 func toUrlproxyURI(relativeToPath string, uri string, opts *urlopts.Options) string {
 	if uri == "" {
 		return uri
@@ -55,34 +59,13 @@ func toUrlproxyURI(relativeToPath string, uri string, opts *urlopts.Options) str
 	if err != nil {
 		return uri
 	}
-	cloneOpts := opts.Clone()
-
-	if u.Scheme != "" {
-		// it's an absolute url, convert it into a relative url for urlproxy
-		cloneOpts.Set(urlopts.OptScheme.New(u.Scheme))
-		cloneOpts.Set(urlopts.OptHost.New(u.Host))
-		optPath := sortedOptionPath(cloneOpts)
-		u.Path = "/" + optPath + u.Path
-		u.Scheme = ""
-		u.Host = ""
-	} else {
-		// it's a relative url
-		if !strings.HasPrefix(u.Path, "/") {
-			pos := strings.LastIndexByte(relativeToPath, '/')
-			if pos != -1 {
-				u.Path = relativeToPath[:pos+1] + u.Path
-			}
-		}
-		optPath := sortedOptionPath(cloneOpts)
-		if optPath != "" {
-			if strings.HasPrefix(u.Path, "/") {
-				// absolute path
-				u.Path = "/" + optPath + u.Path
-			} else {
-				// relative path
-				u.Path = optPath + "/" + u.Path
-			}
+	// if `uri` is a relative url, we should make it relative to `relativeToPath`
+	if u.Scheme == "" && !strings.HasPrefix(u.Path, "/") {
+		pos := strings.LastIndexByte(relativeToPath, '/')
+		if pos != -1 {
+			u.Path = relativeToPath[:pos+1] + u.Path
 		}
 	}
+	u = urlopts.RelocateToUrlproxy(u, opts)
 	return u.String()
 }
