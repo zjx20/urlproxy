@@ -61,13 +61,13 @@ There are some special url parameters that can further control the proxy behavio
     ```shell
     $ curl "http://127.0.0.1:8765/httpbin.org/headers?uOptScheme=https"
     {
-    "headers": {
-        "Accept": "*/*",
-        "Accept-Encoding": "gzip",
-        "Host": "httpbin.org",
-        "User-Agent": "curl/7.79.1",
-        "X-Amzn-Trace-Id": "Root=1-63b853d8-2ec483150e898d8470823f62"
-    }
+        "headers": {
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip",
+            "Host": "httpbin.org",
+            "User-Agent": "curl/7.79.1",
+            "X-Amzn-Trace-Id": "Root=1-63b853d8-2ec483150e898d8470823f62"
+        }
     }
     ```
 

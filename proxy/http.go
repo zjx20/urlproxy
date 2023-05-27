@@ -6,16 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
-	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/zjx20/urlproxy/logger"
@@ -109,8 +106,7 @@ func getDialer(host string, opts *urlopts.Options) (dialCtxFunc, string) {
 	var identifier string
 
 	var pd proxy.Dialer
-	if opts.Socks != nil {
-		socksAddr := *opts.Socks
+	if socksAddr, ok := urlopts.OptSocks.ValueFrom(opts); ok {
 		if socksAddr == "" || socksAddr == "off" {
 			// socksAddr == "" or "off" means user wants to disable socks proxying
 		} else {
@@ -138,8 +134,7 @@ func getDialer(host string, opts *urlopts.Options) (dialCtxFunc, string) {
 		fn = pd.(dialer).DialContext
 	}
 
-	if opts.Dns != nil {
-		dns := *opts.Dns
+	if dns, ok := urlopts.OptDns.ValueFrom(opts); ok {
 		identifier += "[dns:" + dns + "]"
 		prevFn := fn
 		fn = func(ctx context.Context, network, addr string) (c net.Conn, err error) {
@@ -148,8 +143,7 @@ func getDialer(host string, opts *urlopts.Options) (dialCtxFunc, string) {
 		}
 	}
 
-	if opts.Ip != nil {
-		ip := *opts.Ip
+	if ip, ok := urlopts.OptIp.ValueFrom(opts); ok {
 		identifier += "[ip:" + host + ":" + ip + "]"
 		prevFn := fn
 		fn = func(ctx context.Context, network, addr string) (c net.Conn, err error) {
@@ -223,16 +217,17 @@ func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *ht
 	} else {
 		// update the scheme
 		proxyReqUrl.Scheme = "http"
-		if opts.Scheme != nil {
-			proxyReqUrl.Scheme = *opts.Scheme
+		if scheme, ok := urlopts.OptScheme.ValueFrom(opts); ok {
+			proxyReqUrl.Scheme = scheme
 		}
 		// update the host
 		if proxyReqUrl.Scheme != "file" {
-			if opts.Host == nil {
-				err = fmt.Errorf("opts.Host is nil")
+			if host, ok := urlopts.OptHost.ValueFrom(opts); ok {
+				proxyReqUrl.Host = host
+			} else {
+				err = fmt.Errorf("OptHost not exists")
 				return
 			}
-			proxyReqUrl.Host = *opts.Host
 		}
 	}
 
@@ -254,16 +249,9 @@ func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *ht
 	proxyReq.Header.Add(headerOrigin, reqSign)
 
 	// add custom headers
-	for _, header := range opts.Headers {
-		if header == "" {
-			continue
-		}
-		parts := append(strings.SplitN(header, ":", 2), "")
-		val, err := url.PathUnescape(parts[1])
-		if err != nil {
-			val = parts[1]
-		}
-		proxyReq.Header.Set(parts[0], strings.TrimLeftFunc(val, unicode.IsSpace))
+	headers, _ := urlopts.OptHeader.ValueFrom(opts)
+	for key, values := range headers {
+		proxyReq.Header[key] = values
 	}
 
 	logger.Debugf("proxyReq: %+v", proxyReq)
@@ -272,7 +260,7 @@ func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *ht
 }
 
 func doRequest(proxyReq *http.Request, opts *urlopts.Options) (*http.Response, error) {
-	parallelism := urlopts.ToVal(opts.RaceMode, 0)
+	parallelism, _ := urlopts.OptRaceMode.ValueFrom(opts)
 	if parallelism > maxParallelism {
 		parallelism = maxParallelism
 	}
@@ -284,7 +272,7 @@ func doRequest(proxyReq *http.Request, opts *urlopts.Options) (*http.Response, e
 		}
 		ch := make(chan result, parallelism)
 		var cancels []context.CancelFunc
-		for i := 0; i < parallelism; i++ {
+		for i := int64(0); i < parallelism; i++ {
 			cli := getHttpCli(proxyReq.Host, opts, false)
 			ctx, cancel := context.WithCancel(proxyReq.Context())
 			req := proxyReq.WithContext(ctx)
@@ -293,7 +281,7 @@ func doRequest(proxyReq *http.Request, opts *urlopts.Options) (*http.Response, e
 				logger.Debugf("[RACE] doing concurrent request, idx: %d", i)
 				resp, err := doRequestSerial(cli, req, opts)
 				ch <- result{resp, err, i}
-			}(i)
+			}(int(i))
 		}
 		var lastResp *http.Response
 		var lastErr error
@@ -340,8 +328,8 @@ func doRequest(proxyReq *http.Request, opts *urlopts.Options) (*http.Response, e
 }
 
 func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Options) (*http.Response, error) {
-	retriesNon2xx := urlopts.ToVal(opts.RetriesNon2xx, 0)
-	retriesError := urlopts.ToVal(opts.RetriesError, 0)
+	retriesNon2xx, _ := urlopts.OptRetriesNon2xx.ValueFrom(opts)
+	retriesError, _ := urlopts.OptRetriesError.ValueFrom(opts)
 
 	const maxRetryDelay = time.Second
 	retryDelay := 100 * time.Millisecond
@@ -353,7 +341,7 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Opt
 	}
 
 	for {
-		if urlopts.ToVal(opts.AntiCaching, false) {
+		if antiCaching, _ := urlopts.OptAntiCaching.ValueFrom(opts); antiCaching {
 			query := proxyReq.URL.Query()
 			query.Set("__t", strconv.FormatInt(time.Now().UnixNano(), 10))
 			proxyReq.URL.RawQuery = query.Encode()
@@ -385,7 +373,7 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Opt
 			}
 			logger.Debugf("url: %s, status code: %d. retry for non-2xx, remaining retries: %d",
 				proxyReq.URL.String(), resp.StatusCode, retriesNon2xx)
-			if _, err := io.Copy(ioutil.Discard, resp.Body); err != nil {
+			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
 				logger.Errorf("discard response body failed, err: %s", err)
 				return resp, err
 			}
@@ -477,7 +465,7 @@ func Handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) boo
 		return true
 	}
 
-	if timeoutMs := urlopts.ToVal(opts.TimeoutMs, 0); timeoutMs > 0 {
+	if timeoutMs, _ := urlopts.OptTimeoutMs.ValueFrom(opts); timeoutMs > 0 {
 		var ctx context.Context
 		ctx, cancel := context.WithTimeout(req.Context(), time.Duration(timeoutMs)*time.Millisecond)
 		proxyReq = proxyReq.WithContext(ctx)

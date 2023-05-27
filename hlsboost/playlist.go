@@ -66,12 +66,16 @@ type playlist struct {
 func newPlaylist(selfCli *SelfClient, uri string, reqOpts *urlopts.Options,
 	updateIntvl time.Duration, cacheRoot string) *playlist {
 	cancelCtx, cancel := context.WithCancel(context.Background())
-	maxPrefetches := 1
-	if reqOpts.HLSPrefetches != nil {
-		maxPrefetches = *reqOpts.HLSPrefetches
-		if maxPrefetches < 1 {
-			maxPrefetches = 1
-		}
+	maxPrefetches, ok := urlopts.OptHLSPrefetches.ValueFrom(reqOpts)
+	if !ok {
+		// libmpv will request two segments at the same time, but it needs
+		// both segments to return data. If the second segment does not return
+		// data, it will not consume the data of the first segment.
+		// Therefore, the minimum number of concurrent prefetches is 2,
+		// otherwise libmpv will only start playing after the first segment
+		// is fully downloaded, because we start download the second segment
+		// after that.
+		maxPrefetches = 3
 	}
 	return &playlist{
 		id:            md5Short(uri),
@@ -79,7 +83,7 @@ func newPlaylist(selfCli *SelfClient, uri string, reqOpts *urlopts.Options,
 		uri:           uri,
 		reqOpts:       reqOpts,
 		updateIntvl:   updateIntvl,
-		maxPrefetches: maxPrefetches,
+		maxPrefetches: int(maxPrefetches),
 		cancelCtx:     cancelCtx,
 		cancel:        cancel,
 		cacheRoot:     cacheRoot,

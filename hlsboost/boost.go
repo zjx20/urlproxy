@@ -37,42 +37,47 @@ type hlsBoost struct {
 }
 
 func (h *hlsBoost) handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) bool {
-	if urlopts.ToVal(opts.HLSSkip, false) {
+	if skip, _ := urlopts.OptHLSSkip.ValueFrom(opts); skip {
 		// a request from SelfClient
 		return false
 	}
 	if req.URL.Scheme != "" || req.Method != http.MethodGet {
 		return false
 	}
-	if opts.HLSSegment != nil {
+	if urlopts.OptHLSSegment.ExistsIn(opts) {
 		return h.serveSegment(w, req, opts)
 	}
-	if opts.HLSBoost != nil {
+	if urlopts.OptHLSBoost.ExistsIn(opts) {
 		return h.servePlaylist(w, req, opts)
 	}
 	return false
 }
 
 func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) bool {
-	if opts.HLSPlaylist == nil || opts.HLSUser == nil || opts.HLSSegment == nil {
+	if !urlopts.OptHLSPlaylist.ExistsIn(opts) ||
+		!urlopts.OptHLSUser.ExistsIn(opts) ||
+		!urlopts.OptHLSSegment.ExistsIn(opts) {
 		// fallback to normal proxy
 		return false
 	}
-	pl := h.mgr.GetPlaylist(*opts.HLSPlaylist)
+	playlistId, _ := urlopts.OptHLSPlaylist.ValueFrom(opts)
+	pl := h.mgr.GetPlaylist(playlistId)
 	if pl == nil {
-		logger.Warnf("playlist %s not found", *opts.HLSPlaylist)
+		logger.Warnf("playlist %s not found", playlistId)
 		w.WriteHeader(http.StatusGone)
 		return true
 	}
-	user := h.mgr.GetUser(*opts.HLSUser) // not nil
-	seg := user.GetSegment(pl, *opts.HLSSegment)
+	userId, _ := urlopts.OptHLSUser.ValueFrom(opts)
+	segId, _ := urlopts.OptHLSSegment.ValueFrom(opts)
+	user := h.mgr.GetUser(userId) // not nil
+	seg := user.GetSegment(pl, segId)
 	if seg == nil {
 		// fallback to normal proxy
 		return false
 	}
 	seg.Acquire()
 	defer seg.Release()
-	logger.Debugf("serving segment %s, url: %s", seg.segId, req.URL.String())
+	logger.Debugf("serving segment %s, req: %+v", seg.segId, req)
 	segSize, _ := seg.TotalSize(req.Context()) // blocking
 	// status should be more reliable after getting total size
 	if status := seg.Status(); status == ant.Aborted || status == ant.Destroyed {
@@ -133,17 +138,19 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 
 func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 	opts *urlopts.Options) bool {
+	logger.Debugf("serve playlist, req: %+v, opts: %+v", req, opts)
 	playlistURI, normalizedOpts := req.URL.String(), normalizedOptions(opts)
 	// hash the url with target's host and scheme
 	playlistId := md5Short(toUrlproxyURI("/", playlistURI, normalizedOpts))
-	opts.HLSPlaylist = &playlistId
+	opts.Set(urlopts.OptHLSPlaylist.New(playlistId))
 	newUser := false
-	if opts.HLSUser == nil {
-		userId := genId()
-		opts.HLSUser = &userId
+	userId, exists := urlopts.OptHLSUser.ValueFrom(opts)
+	if !exists {
+		userId = genId()
+		opts.Set(urlopts.OptHLSUser.New(userId))
 		newUser = true
 	}
-	user := h.mgr.GetUser(*opts.HLSUser)
+	user := h.mgr.GetUser(userId)
 
 	// respond a m3u8 base on the progress
 	if pl := h.mgr.GetPlaylist(playlistId); pl != nil {
@@ -197,13 +204,13 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 }
 
 func normalizedOptions(opts *urlopts.Options) *urlopts.Options {
-	cloneOpts := *opts
-	cloneOpts.HLSBoost = nil
-	cloneOpts.HLSPlaylist = nil
-	cloneOpts.HLSUser = nil
-	cloneOpts.HLSSegment = nil
-	cloneOpts.HLSSkip = nil
-	return &cloneOpts
+	cloneOpts := opts.Clone()
+	cloneOpts.Remove(urlopts.OptHLSBoost)
+	cloneOpts.Remove(urlopts.OptHLSPlaylist)
+	cloneOpts.Remove(urlopts.OptHLSUser)
+	cloneOpts.Remove(urlopts.OptHLSSegment)
+	cloneOpts.Remove(urlopts.OptHLSSkip)
+	return cloneOpts
 }
 
 func isMaster(pl *m3u8.Playlist) bool {

@@ -29,15 +29,16 @@ type segment struct {
 
 func newSegment(seq int, segId string, url string, cacheDir string,
 	reqOpts *urlopts.Options) *segment {
-	pieceSize := defaultPieceSize
-	if reqOpts.AntPieceSize != nil {
-		pieceSize = *reqOpts.AntPieceSize
+	pieceSize, ok := urlopts.OptAntPieceSize.ValueFrom(reqOpts)
+	if !ok {
+		pieceSize = defaultPieceSize
 	}
-	ants := defaultAnts
-	if reqOpts.AntConcurrentPieces != nil {
-		ants = *reqOpts.AntConcurrentPieces
+	ants, ok := urlopts.OptAntConcurrentPieces.ValueFrom(reqOpts)
+	if !ok {
+		ants = defaultAnts
 	}
-	d := ant.NewDownloader(pieceSize, ants, url, path.Join(cacheDir, segId))
+	d := ant.NewDownloader(int(pieceSize), int(ants), url,
+		path.Join(cacheDir, segId))
 	s := &segment{
 		seq:        seq,
 		segId:      segId,

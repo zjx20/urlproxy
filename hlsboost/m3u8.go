@@ -13,11 +13,11 @@ func rewriteM3U8(pl *m3u8.Playlist, parentURI string, opts *urlopts.Options) *m3
 		switch it := x.(type) {
 		case *m3u8.PlaylistItem:
 			clone := *it
-			cloneOpts := *opts
-			cloneOpts.HLSBoost = &trueVal
-			cloneOpts.HLSPlaylist = nil
-			cloneOpts.HLSSegment = nil
-			clone.URI = toUrlproxyURI(parentURI, clone.URI, &cloneOpts)
+			cloneOpts := opts.Clone()
+			cloneOpts.Set(urlopts.OptHLSBoost.New(true))
+			cloneOpts.Remove(urlopts.OptHLSPlaylist)
+			cloneOpts.Remove(urlopts.OptHLSSegment)
+			clone.URI = toUrlproxyURI(parentURI, clone.URI, cloneOpts)
 			clonePl.Items[idx] = &clone
 		case *m3u8.SessionKeyItem:
 			if it.Encryptable != nil && it.Encryptable.URI != nil {
@@ -53,18 +53,18 @@ func rewriteM3U8(pl *m3u8.Playlist, parentURI string, opts *urlopts.Options) *m3
 			}
 		case *m3u8.SegmentItem:
 			clone := *it
-			cloneOpts := *opts
+			cloneOpts := opts.Clone()
 			if it.Duration > 0 {
 				segId := md5Short(clone.Segment)
-				cloneOpts.HLSBoost = nil
-				cloneOpts.HLSSegment = &segId
+				cloneOpts.Remove(urlopts.OptHLSBoost)
+				cloneOpts.Set(urlopts.OptHLSSegment.New(segId))
 			} else {
 				// it's a playlist item if duration <= 0
-				cloneOpts.HLSBoost = &trueVal
-				cloneOpts.HLSPlaylist = nil
-				cloneOpts.HLSSegment = nil
+				cloneOpts.Set(urlopts.OptHLSBoost.New(true))
+				cloneOpts.Remove(urlopts.OptHLSPlaylist)
+				cloneOpts.Remove(urlopts.OptHLSSegment)
 			}
-			clone.Segment = toUrlproxyURI(parentURI, clone.Segment, &cloneOpts)
+			clone.Segment = toUrlproxyURI(parentURI, clone.Segment, cloneOpts)
 			clonePl.Items[idx] = &clone
 		}
 	}

@@ -5,13 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/zjx20/urlproxy/urlopts"
-)
-
-var (
-	trueVal = true
 )
 
 type SelfClient struct {
@@ -38,10 +35,16 @@ func (h *SelfClient) Get(ctx context.Context, relativeToPath string, uri string,
 
 func (h *SelfClient) ToFinalUrl(relativeToPath string, uri string,
 	opts *urlopts.Options) string {
-	tmp := *opts
-	tmp.HLSSkip = &trueVal
-	path := toUrlproxyURI(relativeToPath, uri, opts)
+	tmp := opts.Clone()
+	tmp.Set(urlopts.OptHLSSkip.New(true))
+	path := toUrlproxyURI(relativeToPath, uri, tmp)
 	return fmt.Sprintf("%s://%s%s", h.scheme, h.addr, path)
+}
+
+func sortedOptionPath(opts *urlopts.Options) string {
+	list := urlopts.ToList(opts)
+	sort.Strings(list)
+	return strings.Join(list, "/")
 }
 
 func toUrlproxyURI(relativeToPath string, uri string, opts *urlopts.Options) string {
@@ -52,15 +55,13 @@ func toUrlproxyURI(relativeToPath string, uri string, opts *urlopts.Options) str
 	if err != nil {
 		return uri
 	}
-	cloneOpts := *opts
+	cloneOpts := opts.Clone()
 
 	if u.Scheme != "" {
 		// it's an absolute url, convert it into a relative url for urlproxy
-		scheme := u.Scheme
-		host := u.Host
-		cloneOpts.Scheme = &scheme
-		cloneOpts.Host = &host
-		optPath := strings.Join(urlopts.ToList(&cloneOpts), "/")
+		cloneOpts.Set(urlopts.OptScheme.New(u.Scheme))
+		cloneOpts.Set(urlopts.OptHost.New(u.Host))
+		optPath := sortedOptionPath(cloneOpts)
 		u.Path = "/" + optPath + u.Path
 		u.Scheme = ""
 		u.Host = ""
@@ -72,7 +73,7 @@ func toUrlproxyURI(relativeToPath string, uri string, opts *urlopts.Options) str
 				u.Path = relativeToPath[:pos+1] + u.Path
 			}
 		}
-		optPath := strings.Join(urlopts.ToList(&cloneOpts), "/")
+		optPath := sortedOptionPath(cloneOpts)
 		if optPath != "" {
 			if strings.HasPrefix(u.Path, "/") {
 				// absolute path
