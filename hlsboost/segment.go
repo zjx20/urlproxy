@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"sync"
+	"time"
 
 	"github.com/zjx20/urlproxy/ant"
 	"github.com/zjx20/urlproxy/logger"
@@ -14,6 +15,7 @@ import (
 const (
 	defaultPieceSize = 512 * 1024
 	defaultAnts      = 5
+	defaultTimeoutMs = 5000
 )
 
 type segment struct {
@@ -37,8 +39,13 @@ func newSegment(seq int, segId string, url string, cacheDir string,
 	if !ok {
 		ants = defaultAnts
 	}
+	timeoutMs, ok := urlopts.OptHLSTimeoutMs.ValueFrom(reqOpts)
+	if !ok {
+		timeoutMs = defaultTimeoutMs
+	}
 	d := ant.NewDownloader(int(pieceSize), int(ants), url,
-		path.Join(cacheDir, segId), manipulateRequestToSkipHlsBoost)
+		path.Join(cacheDir, segId), manipulateRequestToSkipHlsBoost,
+		time.Duration(timeoutMs)*time.Millisecond)
 	s := &segment{
 		seq:        seq,
 		segId:      segId,

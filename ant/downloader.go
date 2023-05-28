@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/zjx20/urlproxy/logger"
 )
@@ -55,12 +56,14 @@ type Downloader struct {
 	url       string
 	save      string
 	rm        RequestManipulator
+	timeout   time.Duration
 	f         *os.File
 
 	cancelCtx context.Context
 	cancel    context.CancelFunc
 	stopped   bool
 
+	startTime         time.Time
 	status            Status
 	totalSize         int64
 	downloaded        *space
@@ -69,7 +72,7 @@ type Downloader struct {
 }
 
 func NewDownloader(pieceSize int, ants int, url string, save string,
-	rm RequestManipulator) *Downloader {
+	rm RequestManipulator, timeout time.Duration) *Downloader {
 	if pieceSize <= 0 {
 		panic(fmt.Sprintf("pieceSize %d is invalid", pieceSize))
 	}
@@ -82,6 +85,7 @@ func NewDownloader(pieceSize int, ants int, url string, save string,
 		url:       url,
 		save:      save,
 		rm:        rm,
+		timeout:   timeout,
 	}
 	d.init()
 	return d
@@ -102,6 +106,7 @@ func (d *Downloader) Start() error {
 	if d.status != NotStarted {
 		return errAlreadyStarted
 	}
+	d.startTime = time.Now()
 	d.status = Started
 	dir := path.Dir(d.save)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -115,6 +120,7 @@ func (d *Downloader) Start() error {
 	}
 	d.f = f
 	go d.brain(d.cancelCtx)
+	logger.Debugf("[ant] start %s", d.url)
 	return nil
 }
 
@@ -198,8 +204,10 @@ func (d *Downloader) finishLocked(err error) {
 	switch d.status {
 	case NotStarted, Started, Downloading:
 		if err != nil {
-			logger.Errorf("[ant] downloader for %s aborted with error: %s",
-				d.url, err)
+			if err != errDestroyed {
+				logger.Errorf("[ant] %s aborted with error: %s, spent: %s",
+					d.url, err, time.Since(d.startTime))
+			}
 			d.status = Aborted
 		} else {
 			d.status = Completed
@@ -207,6 +215,8 @@ func (d *Downloader) finishLocked(err error) {
 				total := d.downloaded.coveredRange(0)
 				d.totalSize = total.end
 			}
+			logger.Infof("[ant] %s download completed, size %d, spent %s",
+				d.url, d.totalSize, time.Since(d.startTime))
 		}
 	}
 }
@@ -353,6 +363,8 @@ func (d *Downloader) download(ctx context.Context,
 			temporary: temporary,
 		})
 	}
+	ctx, cancelFn := context.WithCancel(ctx)
+	defer cancelFn()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
 	if err != nil {
 		logger.Errorf("new request error: %s", err)
@@ -365,6 +377,8 @@ func (d *Downloader) download(ctx context.Context,
 	if d.rm != nil {
 		d.rm(req)
 	}
+	dog := newWatchDog(cancelFn, d.timeout)
+	defer dog.stop()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		logger.Errorf("do request error: %s", err)
@@ -425,6 +439,7 @@ func (d *Downloader) download(ctx context.Context,
 
 	buf := make([]byte, 32*1024)
 	for {
+		dog.feed()
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			werr := d.writeAt(buf[:n], offset)

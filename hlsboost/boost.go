@@ -140,9 +140,12 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 	opts *urlopts.Options) bool {
 	logger.Debugf("serve playlist, req: %+v, opts: %+v", req, opts)
 	playlistURI, normalizedOpts := req.URL.String(), normalizedOptions(opts)
-	// hash the url with target's host and scheme
-	playlistId := md5Short(toUrlproxyURI("/", playlistURI, normalizedOpts))
-	opts.Set(urlopts.OptHLSPlaylist.New(playlistId))
+	playlistId, exists := urlopts.OptHLSPlaylist.ValueFrom(opts)
+	if !exists {
+		// hash the url with target's host and scheme
+		playlistId = md5Short(toUrlproxyURI("/", playlistURI, normalizedOpts))
+		opts.Set(urlopts.OptHLSPlaylist.New(playlistId))
+	}
 	newUser := false
 	userId, exists := urlopts.OptHLSUser.ValueFrom(opts)
 	if !exists {
@@ -157,10 +160,10 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 		m3 := user.GetM3U8(pl)
 		if newUser {
 			// inject a user id to the playlist url
-			m3 = getVariantM3U8(pl.uri)
+			m3 = getVariantM3U8(playlistURI)
 		}
 		logger.Debugf("user %s get playlist %s", user.id, playlistId)
-		respondRewrittenM3U8(pl.uri, m3, w, pl.reqOpts)
+		respondRewrittenM3U8(pl.uri, m3, w, opts)
 		return true
 	}
 
@@ -180,17 +183,16 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 	finalReqUrl.Host = ""
 	finalReqUrl.Scheme = ""
 	finalUrl, finalOpts := urlopts.Extract(&finalReqUrl)
-	playlistURI, opts = finalUrl.String(), finalOpts
 	logger.Debugf("sniffing %s, final url: %s, opts: %s",
 		req.URL, playlistURI, urlopts.SortedOptionPath(opts))
 
 	if isMaster(m3) {
 		// master m3u8 doesn't contain any segment
-		respondRewrittenM3U8(playlistURI, m3, w, opts)
+		respondRewrittenM3U8(finalUrl.String(), m3, w, opts)
 		return true
 	} else {
 		// create a new playlist
-		pl := newPlaylist(h.selfCli, playlistURI, opts, 10*time.Second, *cacheDir)
+		pl := newPlaylist(h.selfCli, finalUrl.String(), finalOpts, *cacheDir)
 		err := pl.Init(m3)
 		if err != nil {
 			logger.Errorf("initialize playlist %s failed, err: %s", pl.id, err)
@@ -202,12 +204,13 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 		// up immediately by manager.
 		m3 = user.GetM3U8(pl)
 		h.mgr.AddPlaylist(playlistId, pl)
+		logger.Infof("added new playlist %s", playlistId)
 
 		if newUser {
 			// inject a user id to the playlist url
 			m3 = getVariantM3U8(playlistURI)
 		}
-		respondRewrittenM3U8(playlistURI, m3, w, opts)
+		respondRewrittenM3U8(finalUrl.String(), m3, w, opts)
 		return true
 	}
 }

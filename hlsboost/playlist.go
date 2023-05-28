@@ -6,6 +6,7 @@ import (
 	"io"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/etherlabsio/go-m3u8/m3u8"
@@ -38,6 +39,11 @@ import (
 //      outdated, in which case we need to clear the client progress, so that
 //      the client can pull the latest playlist.
 
+const (
+	defaultFetchTimeout  = 5 * time.Second
+	maxUpdateIntervalSec = 10
+)
+
 type prefetch struct {
 	startFromSeq int
 	durationSec  float64
@@ -49,7 +55,8 @@ type playlist struct {
 	selfCli       *SelfClient
 	uri           string
 	reqOpts       *urlopts.Options
-	updateIntvl   time.Duration
+	updateIntvl   int32 // in seconds
+	fetchTimeout  time.Duration
 	maxPrefetches int
 	cancelCtx     context.Context
 	cancel        context.CancelFunc
@@ -64,7 +71,7 @@ type playlist struct {
 }
 
 func newPlaylist(selfCli *SelfClient, uri string, reqOpts *urlopts.Options,
-	updateIntvl time.Duration, cacheRoot string) *playlist {
+	cacheRoot string) *playlist {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	maxPrefetches, ok := urlopts.OptHLSPrefetches.ValueFrom(reqOpts)
 	if !ok {
@@ -77,12 +84,17 @@ func newPlaylist(selfCli *SelfClient, uri string, reqOpts *urlopts.Options,
 		// after that.
 		maxPrefetches = 3
 	}
+	timeoutMs, ok := urlopts.OptHLSTimeoutMs.ValueFrom(reqOpts)
+	if !ok {
+		timeoutMs = int64(defaultFetchTimeout / time.Millisecond)
+	}
 	return &playlist{
 		id:            md5Short(uri),
 		selfCli:       selfCli,
 		uri:           uri,
 		reqOpts:       reqOpts,
-		updateIntvl:   updateIntvl,
+		updateIntvl:   maxUpdateIntervalSec,
+		fetchTimeout:  time.Duration(timeoutMs) * time.Millisecond,
 		maxPrefetches: int(maxPrefetches),
 		cancelCtx:     cancelCtx,
 		cancel:        cancel,
@@ -210,14 +222,29 @@ func (p *playlist) StopPrefetch(handle any) {
 }
 
 func (p *playlist) runLoop() {
-	ticker := time.NewTicker(p.updateIntvl)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	var last time.Time
 	for {
 		select {
 		case <-ticker.C:
-			p.update()
-			p.tryShrink()
-			p.tryPrefetch()
+			interval := time.Duration(atomic.LoadInt32(&p.updateIntvl)) * time.Second
+			if time.Since(last) < interval {
+				continue
+			}
+			last = time.Now()
+			go func() {
+				times := 3
+				for times > 0 {
+					if err := p.update(); err != nil {
+						times--
+						continue
+					}
+					p.tryShrink()
+					p.tryPrefetch()
+					break
+				}
+			}()
 
 		case <-p.notifyCh:
 			p.tryPrefetch()
@@ -282,7 +309,9 @@ func (p *playlist) tryPrefetch() {
 }
 
 func (p *playlist) update() error {
-	resp, err := p.selfCli.Get(p.cancelCtx, "/", p.uri, p.reqOpts)
+	ctx, cancel := context.WithTimeout(p.cancelCtx, p.fetchTimeout)
+	defer cancel()
+	resp, err := p.selfCli.Get(ctx, "/", p.uri, p.reqOpts)
 	if err != nil {
 		logger.Errorf("failed to get m3u8 playlist from %s, err: %s",
 			p.uri, err)
@@ -375,9 +404,14 @@ func (p *playlist) appendItemsLocked(news []m3u8.Item) {
 
 func (p *playlist) resetLocked(m3 *m3u8.Playlist) {
 	p.filterOut(m3)
-	if time.Duration(m3.Duration())*time.Second < p.updateIntvl {
-		logger.Warnf("playlist %s, updateIntvl (%s) > duration (%d)s",
-			p.id, p.updateIntvl, int(m3.Duration()))
+	updateInterval := 2 * m3.Target
+	if updateInterval > int(maxUpdateIntervalSec) {
+		updateInterval = maxUpdateIntervalSec
+	}
+	if p.updateIntvl != int32(updateInterval) {
+		logger.Infof("playlist %s, updateIntvl changed from %d to %d",
+			p.id, p.updateIntvl, updateInterval)
+		atomic.StoreInt32(&p.updateIntvl, int32(updateInterval))
 	}
 	clone := *m3
 	clone.Items = nil // will append later

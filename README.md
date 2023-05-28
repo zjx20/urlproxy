@@ -207,6 +207,8 @@ Then give the proxied link to the player for accelerated performance!
 
 * `uOptAntPieceSize`: If number of download threads are greater than 1, specifies how many bytes per thread will be downloaded at once; default value is 524288 (512KB).
 
+* `uOptHLSTimeoutMs`: Timeout for fetching `m3u8` playlist or segments; default value is 5000 (5 seconds).
+
 # License
 
 MIT

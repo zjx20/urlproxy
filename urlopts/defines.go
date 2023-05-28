@@ -25,6 +25,7 @@ var (
 
 	OptHLSBoost      = defineBoolOption("HLSBoost")
 	OptHLSPrefetches = defineInt64Option("HLSPrefetches")
+	OptHLSTimeoutMs  = defineInt64Option("HLSTimeoutMs")
 	OptHLSPlaylist   = defineStringOption("HLSPlaylist") // internal
 	OptHLSUser       = defineStringOption("HLSUser")     // internal
 	OptHLSSegment    = defineStringOption("HLSSegment")  // internal
