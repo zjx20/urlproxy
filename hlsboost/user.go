@@ -91,6 +91,7 @@ type user struct {
 	mu        sync.Mutex
 	id        string
 	streamMap map[string]*stream // playlistId => *stream
+	interests int
 }
 
 func newUser(id string) *user {
@@ -118,10 +119,10 @@ func (u *user) GetM3U8(pl *playlist) *m3u8.Playlist {
 	return pl.GetSegmentsFrom(s.latestSeq, 10)
 }
 
-func (u *user) GetSegment(pl *playlist, segId string) *segment {
+func (u *user) GetSegmentAcquired(pl *playlist, segId string) *segment {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	seg := pl.GetSegment(segId)
+	seg := pl.GetSegmentAcquired(segId)
 	if seg == nil {
 		logger.Warnf("user %s, segment %s not found from playlist %s",
 			u.id, segId, pl.id)
@@ -148,7 +149,7 @@ func (u *user) ResetProgress(playlistId string) {
 	}
 }
 
-func (u *user) CheckActive(timeout time.Duration) (empty bool) {
+func (u *user) CheckActive(timeout time.Duration) (active bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	for pId, s := range u.streamMap {
@@ -158,5 +159,17 @@ func (u *user) CheckActive(timeout time.Duration) (empty bool) {
 			logger.Infof("user %s stop watch playlist %s", u.id, pId)
 		}
 	}
-	return len(u.streamMap) == 0
+	return u.interests > 0 || len(u.streamMap) != 0
+}
+
+func (u *user) Acquire() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.interests++
+}
+
+func (u *user) Release() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.interests--
 }

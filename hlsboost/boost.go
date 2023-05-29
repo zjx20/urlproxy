@@ -61,21 +61,22 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 		return false
 	}
 	playlistId, _ := urlopts.OptHLSPlaylist.ValueFrom(opts)
-	pl := h.mgr.GetPlaylist(playlistId)
+	pl := h.mgr.GetPlaylistAcquired(playlistId)
 	if pl == nil {
 		logger.Warnf("playlist %s not found", playlistId)
 		w.WriteHeader(http.StatusGone)
 		return true
 	}
+	defer pl.Release()
 	userId, _ := urlopts.OptHLSUser.ValueFrom(opts)
 	segId, _ := urlopts.OptHLSSegment.ValueFrom(opts)
-	user := h.mgr.GetUser(userId) // not nil
-	seg := user.GetSegment(pl, segId)
+	user := h.mgr.GetUserAcquired(userId) // not nil
+	defer user.Release()
+	seg := user.GetSegmentAcquired(pl, segId)
 	if seg == nil {
 		// fallback to normal proxy
 		return false
 	}
-	seg.Acquire()
 	defer seg.Release()
 	logger.Debugf("serving segment %s, req: %+v", seg.segId, req)
 	segSize, _ := seg.TotalSize(req.Context()) // blocking
@@ -153,10 +154,12 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 		opts.Set(urlopts.OptHLSUser.New(userId))
 		newUser = true
 	}
-	user := h.mgr.GetUser(userId)
+	user := h.mgr.GetUserAcquired(userId)
+	defer user.Release()
 
 	// respond a m3u8 base on the progress
-	if pl := h.mgr.GetPlaylist(playlistId); pl != nil {
+	if pl := h.mgr.GetPlaylistAcquired(playlistId); pl != nil {
+		defer pl.Release()
 		m3 := user.GetM3U8(pl)
 		if newUser {
 			// inject a user id to the playlist url
@@ -192,20 +195,27 @@ func (h *hlsBoost) servePlaylist(w http.ResponseWriter, req *http.Request,
 		return true
 	} else {
 		// create a new playlist
-		pl := newPlaylist(h.selfCli, finalUrl.String(), finalOpts, *cacheDir)
+		pl := newPlaylist(h.selfCli, playlistId, finalUrl.String(),
+			finalOpts, *cacheDir)
 		err := pl.Init(m3)
 		if err != nil {
 			logger.Errorf("initialize playlist %s failed, err: %s", pl.id, err)
 			return false
 		}
 
-		// let the playlist and the user establish association before adding
-		// the playlist to the manager, so that playlist will not be cleaned
-		// up immediately by manager.
-		m3 = user.GetM3U8(pl)
-		h.mgr.AddPlaylist(playlistId, pl)
-		logger.Infof("added new playlist %s", playlistId)
+		// someone else may be also requesting the same playlist. with
+		// this atomic operation, we can guarantee that only one playlist
+		// object is running in background.
+		pl, added := h.mgr.GetOrAddPlaylistAcquired(playlistId, pl)
+		if added {
+			logger.Infof("added new playlist %s, url: %s", playlistId, playlistURI)
+			pl.Start()
+		}
+		defer pl.Release()
 
+		// let the playlist and the user establish association, so that
+		// the playlist will not be cleaned up immediately by manager.
+		m3 = user.GetM3U8(pl)
 		if newUser {
 			// inject a user id to the playlist url
 			m3 = getVariantM3U8(playlistURI)

@@ -70,9 +70,8 @@ type playlist struct {
 	interests  int
 }
 
-func newPlaylist(selfCli *SelfClient, uri string, reqOpts *urlopts.Options,
-	cacheRoot string) *playlist {
-	cancelCtx, cancel := context.WithCancel(context.Background())
+func newPlaylist(selfCli *SelfClient, id string, uri string,
+	reqOpts *urlopts.Options, cacheRoot string) *playlist {
 	maxPrefetches, ok := urlopts.OptHLSPrefetches.ValueFrom(reqOpts)
 	if !ok {
 		// libmpv will request two segments at the same time, but it needs
@@ -89,15 +88,13 @@ func newPlaylist(selfCli *SelfClient, uri string, reqOpts *urlopts.Options,
 		timeoutMs = int64(defaultFetchTimeout / time.Millisecond)
 	}
 	return &playlist{
-		id:            md5Short(uri),
+		id:            id,
 		selfCli:       selfCli,
 		uri:           uri,
 		reqOpts:       reqOpts,
 		updateIntvl:   maxUpdateIntervalSec,
 		fetchTimeout:  time.Duration(timeoutMs) * time.Millisecond,
 		maxPrefetches: int(maxPrefetches),
-		cancelCtx:     cancelCtx,
-		cancel:        cancel,
 		cacheRoot:     cacheRoot,
 		notifyCh:      make(chan struct{}, 1),
 	}
@@ -112,8 +109,19 @@ func (p *playlist) Init(m3 *m3u8.Playlist) error {
 	defer p.mu.Unlock()
 	p.cacheDir = cacheDir
 	p.resetLocked(m3)
-	go p.runLoop()
 	return nil
+}
+
+func (p *playlist) Start() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cancelCtx != nil {
+		return
+	}
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	p.cancelCtx = cancelCtx
+	p.cancel = cancel
+	go p.runLoop()
 }
 
 func (p *playlist) Destroy() error {
@@ -121,6 +129,8 @@ func (p *playlist) Destroy() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.interests > 0 || len(p.segments) > 0 {
+		logger.Debugf("playlist %s still in use, interests: %d, segments: %d",
+			p.id, p.interests, len(p.segments))
 		return fmt.Errorf("still in use")
 	}
 	if p.cancelCtx.Err() != nil {
@@ -168,7 +178,7 @@ func (p *playlist) GetSegmentsFrom(seq int, count int) *m3u8.Playlist {
 	return &pl
 }
 
-func (p *playlist) GetSegment(segId string) *segment {
+func (p *playlist) GetSegmentAcquired(segId string) *segment {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, seg := range p.segments {
@@ -176,6 +186,7 @@ func (p *playlist) GetSegment(segId string) *segment {
 			continue
 		}
 		if seg.segId == segId {
+			seg.Acquire()
 			return seg
 		}
 	}
@@ -434,6 +445,8 @@ func (p *playlist) shrinkLocked(max int) {
 			break
 		}
 		cnt++
+		logger.Debugf("playlist %s shrink, destroyed segment %s",
+			p.id, p.segments[i].segId)
 	}
 	p.segments = p.segments[cnt:]
 	p.m3.Items = p.m3.Items[cnt:]

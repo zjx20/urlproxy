@@ -35,7 +35,7 @@ func (m *manager) tidyLoop() {
 	for range ticker.C {
 		m.mu.Lock()
 		for uId, u := range m.userMap {
-			if empty := u.CheckActive(1 * time.Minute); empty {
+			if active := u.CheckActive(1 * time.Minute); !active {
 				delete(m.userMap, uId)
 				logger.Infof("user %s becomes inactive", uId)
 			}
@@ -51,19 +51,29 @@ func (m *manager) tidyLoop() {
 	}
 }
 
-func (m *manager) AddPlaylist(id string, pl *playlist) {
+func (m *manager) GetOrAddPlaylistAcquired(id string, pl *playlist) (*playlist, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.playlistMap[id] = pl
+	ret, ok := m.playlistMap[id]
+	if !ok {
+		m.playlistMap[id] = pl
+		ret = pl
+	}
+	ret.Acquire()
+	return ret, !ok
 }
 
-func (m *manager) GetPlaylist(id string) *playlist {
+func (m *manager) GetPlaylistAcquired(id string) *playlist {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.playlistMap[id]
+	pl := m.playlistMap[id]
+	if pl != nil {
+		pl.Acquire()
+	}
+	return pl
 }
 
-func (m *manager) GetUser(id string) *user {
+func (m *manager) GetUserAcquired(id string) *user {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u := m.userMap[id]
@@ -72,5 +82,6 @@ func (m *manager) GetUser(id string) *user {
 		u = newUser(id)
 		m.userMap[id] = u
 	}
+	u.Acquire()
 	return u
 }
