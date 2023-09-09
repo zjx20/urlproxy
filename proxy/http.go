@@ -3,6 +3,8 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"crypto"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -21,9 +23,10 @@ import (
 )
 
 var (
-	socks    = flag.String("socks", "", "Upstream socks5 proxy, e.g. 127.0.0.1:1080")
-	socksUds = flag.String("socks-uds", "", "Path of unix domain socket for upstream socks5 proxy")
-	fileRoot = flag.String("file-root", "", "Root path for the file scheme")
+	socks      = flag.String("socks", "", "Upstream socks5 proxy, e.g. 127.0.0.1:1080")
+	socksUds   = flag.String("socks-uds", "", "Path of unix domain socket for upstream socks5 proxy")
+	fileRoot   = flag.String("file-root", "", "Root path for the file scheme")
+	enablePipe = flag.Bool("enable-uoptpipe", false, "Enable uOptPipe")
 )
 
 const (
@@ -208,8 +211,15 @@ func goodStatusCode(statusCode int) bool {
 	return statusCode >= 100 && statusCode < 400
 }
 
+func md5Short(s string) string {
+	m := crypto.MD5.New()
+	m.Write([]byte(s))
+	hash := m.Sum(nil)
+	return hex.EncodeToString(hash[:8])
+}
+
 func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *http.Request, err error) {
-	reqSign := instUUID + "|" + req.URL.String()
+	reqSign := instUUID + "|" + req.URL.String() + "|" + md5Short(urlopts.SortedOptionPath(opts))
 	for _, origin := range req.Header[headerOrigin] {
 		if origin == reqSign {
 			err = fmt.Errorf("recursively request, sign: %s", reqSign)
@@ -237,6 +247,14 @@ func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *ht
 		}
 	}
 
+	if query, exists := urlopts.OptQueryParams.ValueFrom(opts); exists {
+		if proxyReqUrl.RawQuery == "" {
+			proxyReqUrl.RawQuery = query
+		} else {
+			proxyReqUrl.RawQuery = proxyReqUrl.RawQuery + "&" + query
+		}
+	}
+
 	proxyReq, err = http.NewRequestWithContext(
 		req.Context(), req.Method, proxyReqUrl.String(), req.Body)
 	if err != nil {
@@ -260,7 +278,7 @@ func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *ht
 		proxyReq.Header[key] = values
 	}
 
-	logger.Debugf("proxyReq: %+v", proxyReq)
+	logger.Debugf("proxyReq: %+v, urlopts: %s", proxyReq, opts.String())
 
 	return
 }
@@ -392,13 +410,17 @@ func doRequestSerial(cli *http.Client, proxyReq *http.Request, opts *urlopts.Opt
 	}
 }
 
-func ForwardResponse(w http.ResponseWriter, proxyResp *http.Response) {
-	for k := range proxyResp.Header {
+func writeRespHeader(w http.ResponseWriter, header http.Header) {
+	for k, v := range header {
 		if _, exists := donotForwardToResp[k]; exists {
 			continue
 		}
-		w.Header().Set(k, proxyResp.Header.Get(k))
+		w.Header()[k] = v
 	}
+}
+
+func ForwardResponse(w http.ResponseWriter, proxyResp *http.Response) {
+	writeRespHeader(w, proxyResp.Header)
 	w.WriteHeader(proxyResp.StatusCode)
 	_, err := io.Copy(w, proxyResp.Body)
 	proxyResp.Body.Close()
@@ -501,6 +523,26 @@ func Handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) boo
 		return true
 	}
 	rewriteLocation(proxyResp, req, opts)
+	extraRespHeader, _ := urlopts.OptRespHeader.ValueFrom(opts)
+	if len(extraRespHeader) > 0 {
+		if proxyResp.Header == nil {
+			proxyResp.Header = make(http.Header)
+		}
+		for k, v := range extraRespHeader {
+			proxyResp.Header[k] = v
+		}
+	}
+	if *enablePipe {
+		if proxyResp.StatusCode >= 200 && proxyResp.StatusCode < 300 {
+			if cmd, exists := urlopts.OptPipe.ValueFrom(opts); exists {
+				// headers from proxyResp may not suitable for the processed
+				// data, so we only write headers from uOptRespHeader.
+				writeRespHeader(w, extraRespHeader)
+				pipe(w, req, proxyResp, cmd)
+				return true
+			}
+		}
+	}
 	ForwardResponse(w, proxyResp)
 	return true
 }

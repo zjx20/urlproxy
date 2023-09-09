@@ -2,7 +2,7 @@ package urlopts
 
 import (
 	"fmt"
-	"net/url"
+	"net/http"
 )
 
 var (
@@ -12,7 +12,9 @@ var (
 var (
 	OptHost            = defineStringOption("Host")
 	OptHeader          = defineHeaderOption("Header")
+	OptRespHeader      = defineHeaderOption("RespHeader")
 	OptScheme          = defineStringOption("Scheme")
+	OptQueryParams     = defineStringOption("QueryParams")
 	OptSocks           = defineStringOption("Socks")
 	OptDns             = defineStringOption("Dns")
 	OptIp              = defineStringOption("Ip")
@@ -22,6 +24,7 @@ var (
 	OptAntiCaching     = defineBoolOption("AntiCaching")
 	OptRaceMode        = defineInt64Option("RaceMode")
 	OptRewriteRedirect = defineBoolOption("RewriteRedirect")
+	OptPipe            = defineStringOption("Pipe")
 
 	OptHLSBoost      = defineBoolOption("HLSBoost")
 	OptHLSPrefetches = defineInt64Option("HLSPrefetches")
@@ -92,7 +95,7 @@ func defineStringOption(name string) identifier[*StringOption, string] {
 	return addDefinition(name, o, o.Value())
 }
 
-func defineHeaderOption(name string) identifier[*HeaderOption, url.Values] {
+func defineHeaderOption(name string) identifier[*HeaderOption, http.Header] {
 	o := &HeaderOption{}
 	o.name = name
 	return addDefinition(name, o, o.Value())

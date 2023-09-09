@@ -2,6 +2,7 @@ package urlopts
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -97,7 +98,7 @@ func (o *StringOption) Parse(s string) error {
 }
 
 func (o *StringOption) ToUrlOption() []string {
-	return []string{o.urlOptionKey() + o.Value()}
+	return []string{o.urlOptionKey() + url.PathEscape(o.Value())}
 }
 
 func (o *StringOption) Clone() Option {
@@ -108,13 +109,13 @@ func (o *StringOption) Clone() Option {
 //////////////////////////////////////////////////////////////////////////////
 
 type HeaderOption struct {
-	OptionBase[url.Values]
+	OptionBase[http.Header]
 }
 
 func (o *HeaderOption) Parse(s string) error {
 	v := o.Value()
 	if v == nil {
-		v = url.Values{}
+		v = http.Header{}
 	}
 	pos := strings.Index(s, ":")
 	if pos == -1 {
@@ -149,7 +150,7 @@ func (o *HeaderOption) Clone() Option {
 	if len(headers) == 0 {
 		return &co
 	}
-	newHeaders := url.Values{}
+	newHeaders := http.Header{}
 	for key, values := range headers {
 		newHeaders[key] = append([]string{}, values...)
 	}

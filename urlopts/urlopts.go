@@ -93,6 +93,13 @@ func extractOptionName(s string) (bool, string) {
 	return false, s
 }
 
+func pathUnescaped(s string) string {
+	if unescaped, err := url.PathUnescape(s); err == nil {
+		return unescaped
+	}
+	return s
+}
+
 func Extract(u *url.URL) (after url.URL, opts *Options) {
 	after = *u
 	query := after.Query()
@@ -133,7 +140,7 @@ func Extract(u *url.URL) (after url.URL, opts *Options) {
 			}
 			if pos != -1 {
 				_, oName := extractOptionName(seg[:pos])
-				uopts.Add(oName, seg[next:])
+				uopts.Add(oName, pathUnescaped(seg[next:]))
 				continue
 			}
 		}
@@ -147,7 +154,7 @@ func Extract(u *url.URL) (after url.URL, opts *Options) {
 			if len(filtered) > 0 {
 				host := filtered[0]
 				filtered = filtered[1:]
-				uopts.Set(OptHost.name, host)
+				uopts.Set(OptHost.name, pathUnescaped(host))
 			}
 		}
 	}

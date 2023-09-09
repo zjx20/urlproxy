@@ -97,6 +97,32 @@ There are some special url parameters that can further control the proxy behavio
     }
     ```
 
+* `uOptRespHeader`: add extra headers to the response.
+
+    ```shell
+    $ curl -v "http://127.0.0.1:8765/httpbin.org/headers?uOptRespHeader=CustomHeader1:value1&uOptRespHeader=CustomHeader2:value2" > /dev/null
+    Trying 127.0.0.1:8765...
+    * Connected to 127.0.0.1 (127.0.0.1) port 8765 (#0)
+    > GET /httpbin.org/headers?uOptRespHeader=CustomHeader1:value1&uOptRespHeader=CustomHeader2:value2 HTTP/1.1
+    > Host: 127.0.0.1:8765
+    > User-Agent: curl/7.79.1
+    > Accept: */*
+    >
+    * Mark bundle as not supporting multiuse
+    < HTTP/1.1 200 OK
+    < Access-Control-Allow-Credentials: true
+    < Access-Control-Allow-Origin: *
+    < Connection: keep-alive
+    < Content-Length: 297
+    < Content-Type: application/json
+    < Customheader1: value1
+    < Customheader2: value2
+    < Date: Fri, 08 Sep 2023 13:38:13 GMT
+    < Server: gunicorn/19.9.0
+    <
+    * Connection #0 to host 127.0.0.1 left intact
+    ```
+
 * `uOptSocks`: specify the upstream socks5 proxy for this request.
 
     ```shell
@@ -151,6 +177,23 @@ There are some special url parameters that can further control the proxy behavio
 
     ```shell
     $ curl "http://127.0.0.1:8765/httpbin.org/redirect-to?url=http://google.com&status_code=302&uOptRewriteRedirect=true"
+    ```
+
+* `uOptPipe`: the content of this parameter is a shell script. When the proxy request is successful (such as the response code is 200), `urlproxy` will execute this script through `/bin/sh`, and use the body of the proxy response as the stdin of `exec.Cmd`, and then forward the stdout of `exec.Cmd` to the http client.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?uOptPipe=sed%20%27s%2Fhttpbin.org%2Fgro.nibptth%2Fg%27"
+
+    # The command is equivalent to:
+    #   curl -s "http://127.0.0.1:8765/httpbin.org/get" | sed 's/httpbin.org/gro.nibptth/g'
+    ```
+
+    **Note**: This feature is powerful but also very dangerous. Therefore, the `uOptPipe` option will only take effect when the `-enable-uoptpipe` command-line parameter was added to start `urlproxy`. Please make sure not to deploy this feature to the public network.
+
+* `uOptQueryParams`: add extra query parameters to the proxied request. It's useful for passing `uOpt*` to the proxied request.
+
+    ```shell
+    $ curl "http://127.0.0.1:8765/httpbin.org/get?foo=bar&uOptQueryParams=hello%3Dworld"
     ```
 
 ### Alternate Url Pattern
