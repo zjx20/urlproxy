@@ -47,6 +47,10 @@ func (id identifier[O, V]) Name() string {
 	return id.name
 }
 
+func (id identifier[O, V]) OptionKey() string {
+	return UrlOptionPrefix + id.name
+}
+
 func (id *identifier[O, V]) New(v V) Option {
 	o := options[id.name]
 	if o == nil {

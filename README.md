@@ -80,6 +80,8 @@ There are some special url parameters that can further control the proxy behavio
     hello
     ```
 
+    Another special scheme is `tpl`, see the [Template Rendering](#template-rendering) section for more details.
+
 * `uOptHeader`: add extra headers to the proxied request.
 
     ```shell
@@ -221,6 +223,113 @@ $ curl "http://127.0.0.1:8765/uOptScheme=https/uOptHeader=User-Agent:MyClient/ht
 export http_proxy=http://127.0.0.1:8765
 curl -v http://httpbin.org/get
 ```
+
+## Template Rendering
+
+`urlproxy` treats [Go Template](https://pkg.go.dev/text/template) as a programming language for handling http requests (similar to PHP), which allows for some complex data processing. This is equivalent to implementing `func ServeHTTP(w http.ResponseWriter, r *http.Request)` with Go Template, so you can access the `http.Request` and `http.ResponseWriter` objects of the current request (from the client) in the template context. You can use `http.Request` to retrieve request data, such as query parameters, and `http.ResponseWriter` to control status code and response headers. The rendering result of the template is returned to the client as the response body.
+
+To use this feature you need to specify a directory with the `-tpl-root` flag when starting `urlproxy`. To invoke a template, the request should point to a `.tpl` file and add the `uOptScheme=tpl` parameter.
+
+Below is a sample template that first retrieves the value of the `"value"` parameter from the request, constructs an http request, retrieves data from httpbin.org, then parses the returned data into a map, iterates over key-value pairs for output, and finally sets the status code to 500 and appends a header named `"Marker"`.
+
+```go-template
+{{- /* make a request */ -}}
+{{- $myheader := httpHeader "MyHeader" (.Request.URL.Query.Get "value") -}}
+{{- $resp := httpReq "GET" "https://httpbin.org/headers" "" $myheader 10 -}}
+
+{{- /* parse the response from httpbin.org, and then render it, as the response body */ -}}
+{{- $respObj := $resp.Text | fromJson -}}
+{{ range $key, $value := $respObj.headers }}
+  {{- printf "%s: %v" $key $value }}
+{{ end }}
+
+{{- /* control the response header */ -}}
+{{- $_ := .ResponseWriter.Header.Set "Marker" "handled by Go Template" -}}
+{{- $_ := .ResponseWriter.WriteHeader 500 -}}
+```
+
+Save the above template to `./tpl/myheader.tpl` and run the following command.
+
+```shell
+# start urlproxy
+$ ./urlproxy -tpl-root ./tpl &
+
+# invoke addheader.tpl
+$ curl -v "http://127.0.0.1:8765/addheader.tpl?value=hello&uOptScheme=tpl"
+*   Trying 127.0.0.1:8765...
+* Connected to 127.0.0.1 (127.0.0.1) port 8765 (#0)
+> GET /addheader.tpl?uOptScheme=tpl&value=hello HTTP/1.1
+> Host: 127.0.0.1:8765
+> User-Agent: curl/7.79.1
+> Accept: */*
+>
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 500 Internal Server Error
+< Marker: handled by Go Template
+< Date: Sun, 10 Sep 2023 10:34:48 GMT
+< Content-Length: 145
+< Content-Type: text/plain; charset=utf-8
+<
+Accept-Encoding: gzip
+Host: httpbin.org
+Myheader: hello
+User-Agent: Go-http-client/2.0
+X-Amzn-Trace-Id: Root=1-64fd9bc7-2c13ea207781cdee55c3865e
+* Connection #0 to host 127.0.0.1 left intact
+```
+
+Besides referencing the `.tpl` file in the request, you can also inline the template into the `"inline"` parameter. For example:
+
+```shell
+# the inlined template is `sha1sum of "hello" is {{ sha1sum "hello" }}`
+$ curl "http://127.0.0.1:8765/?uOptScheme=tpl&inline=sha1sum%20of%20%22hello%22%20is%20%7B%7B%20sha1sum%20%22hello%22%20%7D%7D"
+# output is
+sha1sum of "hello" is aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
+```
+
+### Template Functions
+
+All functions from [slim-sprig](https://github.com/go-task/slim-sprig) are available in the template context. `urlproxy` also provides other functions for making http requests or processing urls.
+
+* `httpReq(method, url, body, headers, timeoutSec)`：Initiates an http request. Returns a `ResponseWrapper` object.
+
+    ```go-template
+    httpReq "GET" "https://httpbin.org" "" nil 10
+
+    httpReq "POST" "https://httpbin.org/post" "hello" nil 10
+
+    httpReq "GET" "https://httpbin.org/headers" "" (httpHeader "HeaderName" "value") 10
+    ```
+
+    `ResponseWrapper` has all the fields of `http.Response` and adds a `Text` method, which returns the entire response body as text.
+
+    ```go-template
+    (httpReq "GET" "https://httpbin.org" "" nil 10).Text | fromJson
+    ```
+
+* `httpHeader(v ...string)`：Creates a `HeaderWrapper` (mainly used for `httpReq`) with an even number of arguments.
+
+    ```go-template
+    httpHeader "Header1" "value1" "Header2" "value2"
+    ```
+
+* `parseUrl(url)`：Parses the url and returns a `url.URL` object.
+
+    ```go-template
+    (parseUrl "https://httpbin.org/").Host
+    ```
+
+* `urlproxiedUrl(url, urlproxyBaseUrl, uopts ...string)`：Converts to a proxied url (then used with `httpReq`).
+
+    ```go-template
+    urlproxiedUrl "https://httpbin.org/" "http://127.0.0.1:8765/" "uOptScheme" "http" "uOptTimeoutMs" "3000"
+    ```
+
+    The address of the current `urlproxy` instance can be obtained via the template variable `.ExtraValues.urlproxyBaseUrl`.
+
+    ```go-template
+    urlproxiedUrl "https://httpbin.org/" .ExtraValues.urlproxyBaseUrl
+    ```
 
 ## HLSBoost
 

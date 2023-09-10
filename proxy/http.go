@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/zjx20/urlproxy/app/info"
 	"github.com/zjx20/urlproxy/logger"
+	"github.com/zjx20/urlproxy/tpl"
 	"github.com/zjx20/urlproxy/urlopts"
 	"golang.org/x/net/proxy"
 )
@@ -26,6 +28,7 @@ var (
 	socks      = flag.String("socks", "", "Upstream socks5 proxy, e.g. 127.0.0.1:1080")
 	socksUds   = flag.String("socks-uds", "", "Path of unix domain socket for upstream socks5 proxy")
 	fileRoot   = flag.String("file-root", "", "Root path for the file scheme")
+	tplRoot    = flag.String("tpl-root", "", "Root path for the tpl scheme")
 	enablePipe = flag.Bool("enable-uoptpipe", false, "Enable uOptPipe")
 )
 
@@ -163,6 +166,13 @@ func getDialer(host string, opts *urlopts.Options) (dialCtxFunc, string) {
 	return fn, identifier
 }
 
+func tplExtraValues() map[string]interface{} {
+	listenAddr := info.GetListenAddr().String()
+	return map[string]interface{}{
+		"urlproxyBaseUrl": fmt.Sprintf("http://%s/", listenAddr),
+	}
+}
+
 func getHttpCli(host string, opts *urlopts.Options, reusable bool) *http.Client {
 	dialCtxFn, identifier := getDialer(host, opts)
 	if cli, ok := clientPool.Load(identifier); ok && reusable {
@@ -180,6 +190,11 @@ func getHttpCli(host string, opts *urlopts.Options, reusable bool) *http.Client 
 	if *fileRoot != "" {
 		transport.RegisterProtocol("file", http.NewFileTransport(http.Dir(*fileRoot)))
 	}
+	var tplFs http.FileSystem
+	if *tplRoot != "" {
+		tplFs = http.Dir(*tplRoot)
+	}
+	transport.RegisterProtocol("tpl", tpl.NewTplTransport(tplFs, tplExtraValues()))
 	cli := &http.Client{
 		Transport: transport,
 		// no redirect
@@ -234,10 +249,10 @@ func prepareProxyRequest(req *http.Request, opts *urlopts.Options) (proxyReq *ht
 		// update the scheme
 		proxyReqUrl.Scheme = "http"
 		if scheme, ok := urlopts.OptScheme.ValueFrom(opts); ok {
-			proxyReqUrl.Scheme = scheme
+			proxyReqUrl.Scheme = strings.ToLower(scheme)
 		}
 		// update the host
-		if proxyReqUrl.Scheme != "file" {
+		if proxyReqUrl.Scheme == "http" || proxyReqUrl.Scheme == "https" {
 			if host, ok := urlopts.OptHost.ValueFrom(opts); ok {
 				proxyReqUrl.Host = host
 			} else {
@@ -425,6 +440,7 @@ func ForwardResponse(w http.ResponseWriter, proxyResp *http.Response) {
 	_, err := io.Copy(w, proxyResp.Body)
 	proxyResp.Body.Close()
 	if err != nil {
+		logger.Debugf("ForwardResponse error: %s", err)
 		return
 	}
 	for k := range proxyResp.Trailer {
@@ -488,7 +504,6 @@ func rewriteLocation(resp *http.Response, req *http.Request, opts *urlopts.Optio
 	if err != nil {
 		return
 	}
-	logger.Debugf("location: %s", resp.Header["Location"])
 	if rewrite, _ := urlopts.OptRewriteRedirect.ValueFrom(opts); rewrite {
 		loc = urlopts.RelocateToUrlproxy(loc, opts)
 		resp.Header.Set("Location", loc.String())

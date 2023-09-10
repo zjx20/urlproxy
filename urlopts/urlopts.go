@@ -150,7 +150,8 @@ func Extract(u *url.URL) (after url.URL, opts *Options) {
 	// but if u.Scheme != "", the url is for a regular http proxy request,
 	// so it's not a urlproxied url.
 	if !uopts.Has(OptHost.name) && u.Scheme == "" {
-		if !uopts.Has(OptScheme.name) || uopts.Get(OptScheme.name) != "file" {
+		scheme := strings.ToLower(uopts.Get(OptScheme.name))
+		if scheme == "" || scheme == "http" || scheme == "https" {
 			if len(filtered) > 0 {
 				host := filtered[0]
 				filtered = filtered[1:]
