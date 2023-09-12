@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	cacheDir = flag.String("cache-dir", "./cache", "Cache dir for HLS Boost")
+	cacheDir = flag.String("cache-dir", "./hlscache", "Cache dir for HLS Boost")
 )
 
 func Handler(selfCli *SelfClient) handler.HttpHandler {

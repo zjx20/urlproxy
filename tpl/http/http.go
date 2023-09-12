@@ -16,16 +16,26 @@ import (
 func Funcs() template.FuncMap {
 	return template.FuncMap{
 		"httpReq":       httpReq,
+		"tryHttpReq":    tryHttpReq,
 		"httpHeader":    httpHeader,
 		"parseUrl":      parseUrl,
 		"urlproxiedUrl": urlproxiedUrl,
 	}
 }
 
-func httpReq(method string, url string, body string,
+func tryHttpReq(ctx context.Context, method string, url string, body string,
+	header *HeaderWrapper, timeoutSec int) *ResponseWrapper {
+	resp, _ := httpReq(ctx, method, url, body, header, timeoutSec)
+	return resp
+}
+
+func httpReq(ctx context.Context, method string, url string, body string,
 	header *HeaderWrapper, timeoutSec int) (*ResponseWrapper, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	timeout := time.Duration(timeoutSec) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	r := strings.NewReader(body)
 	req, err := http.NewRequestWithContext(ctx, method, url, r)
@@ -38,7 +48,10 @@ func httpReq(method string, url string, body string,
 		}
 	}
 	resp, err := http.DefaultClient.Do(req)
-	return &ResponseWrapper{resp}, err
+	if resp != nil {
+		return &ResponseWrapper{resp}, err
+	}
+	return nil, err
 }
 
 func httpHeader(arr ...string) *HeaderWrapper {

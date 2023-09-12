@@ -226,16 +226,16 @@ curl -v http://httpbin.org/get
 
 ## Template Rendering
 
-`urlproxy` treats [Go Template](https://pkg.go.dev/text/template) as a programming language for handling http requests (similar to PHP), which allows for some complex data processing. This is equivalent to implementing `func ServeHTTP(w http.ResponseWriter, r *http.Request)` with Go Template, so you can access the `http.Request` and `http.ResponseWriter` objects of the current request (from the client) in the template context. You can use `http.Request` to retrieve request data, such as query parameters, and `http.ResponseWriter` to control status code and response headers. The rendering result of the template is returned to the client as the response body.
+`urlproxy` treats [Go Template](https://pkg.go.dev/text/template) as a programming language for handling http requests (similar to PHP), which allows for some complex data processing. This is equivalent to implementing `func ServeHTTP(w http.ResponseWriter, r *http.Request)` with Go Template, so the `http.Request` and `http.ResponseWriter` objects of the current request are available in the template context. Request data such as query parameters can be retrieved by using the `http.Request` object. For the response, the status code, headers and body can be set using the `http.ResponseWriter` object. The render result of the template will also be appended to the response body.
 
-To use this feature you need to specify a directory with the `-tpl-root` flag when starting `urlproxy`. To invoke a template, the request should point to a `.tpl` file and add the `uOptScheme=tpl` parameter.
+When starting `urlproxy`, there is a `-tpl-root` parameter that specifies the directory where the template files are located so that they can be referenced in subsequent requests. If the request path points to the template file (relative to `-tpl-root`) and the `uOptScheme=tpl` parameter is given, `urlproxy` will handle the http request using the specified template.
 
-Below is a sample template that first retrieves the value of the `"value"` parameter from the request, constructs an http request, retrieves data from httpbin.org, then parses the returned data into a map, iterates over key-value pairs for output, and finally sets the status code to 500 and appends a header named `"Marker"`.
+The following is an example template. It first retrieves the value of the `"value"` parameter from the request, constructs an http request, retrieves data from httpbin.org, then parses the returned data into a map, iterates over key-value pairs for output, and finally sets the status code to 500 and appends a header named `"Marker"`.
 
 ```go-template
 {{- /* make a request */ -}}
 {{- $myheader := httpHeader "MyHeader" (.Request.URL.Query.Get "value") -}}
-{{- $resp := httpReq "GET" "https://httpbin.org/headers" "" $myheader 10 -}}
+{{- $resp := httpReq nil "GET" "https://httpbin.org/headers" "" $myheader 10 -}}
 
 {{- /* parse the response from httpbin.org, and then render it, as the response body */ -}}
 {{- $respObj := $resp.Text | fromJson -}}
@@ -243,16 +243,24 @@ Below is a sample template that first retrieves the value of the `"value"` param
   {{- printf "%s: %v" $key $value }}
 {{ end }}
 
+{{- /* It can also use .ResponseWriter.WriteString to write data to the response body.
+       However, it's not recommended to mix the usage of WriteString and the text
+       rendering, because their output order are not determined. */ -}}
+{{- .ResponseWriter.WriteString "Output with .ResponseWriter.WriteString.\n" }}
+{{ range $key, $value := $respObj.headers }}
+  {{- .ResponseWriter.WriteString (printf "%s: %v\n" $key $value) }}
+{{ end }}
+
 {{- /* control the response header */ -}}
 {{- $_ := .ResponseWriter.Header.Set "Marker" "handled by Go Template" -}}
 {{- $_ := .ResponseWriter.WriteHeader 500 -}}
 ```
 
-Save the above template to `./tpl/myheader.tpl` and run the following command.
+Save the above template to `./tplfiles/addheader.tpl` and run the following command.
 
 ```shell
 # start urlproxy
-$ ./urlproxy -tpl-root ./tpl &
+$ ./urlproxy -tpl-root ./tplfiles &
 
 # invoke addheader.tpl
 $ curl -v "http://127.0.0.1:8765/addheader.tpl?value=hello&uOptScheme=tpl"
@@ -278,57 +286,121 @@ X-Amzn-Trace-Id: Root=1-64fd9bc7-2c13ea207781cdee55c3865e
 * Connection #0 to host 127.0.0.1 left intact
 ```
 
-Besides referencing the `.tpl` file in the request, you can also inline the template into the `"inline"` parameter. For example:
+Besides referencing a `.tpl` file, the template can also be inlined in the `"inline"` parameter. For example:
 
 ```shell
 # the inlined template is `sha1sum of "hello" is {{ sha1sum "hello" }}`
 $ curl "http://127.0.0.1:8765/?uOptScheme=tpl&inline=sha1sum%20of%20%22hello%22%20is%20%7B%7B%20sha1sum%20%22hello%22%20%7D%7D"
-# output is
+# the output is
 sha1sum of "hello" is aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
 ```
 
 ### Template Functions
 
-All functions from [slim-sprig](https://github.com/go-task/slim-sprig) are available in the template context. `urlproxy` also provides other functions for making http requests or processing urls.
+All functions from [slim-sprig](https://github.com/go-task/slim-sprig) are available in the template context. `urlproxy` also provides other useful functions.
 
-* `httpReq(method, url, body, headers, timeoutSec)`：Initiates an http request. Returns a `ResponseWrapper` object.
+* `httpReq(ctx, method, url, body, headers, timeoutSec)` - Initiates an http request. Returns a `ResponseWrapper` object.
 
     ```go-template
-    httpReq "GET" "https://httpbin.org" "" nil 10
+    {{- $resp := httpReq nil "GET" "https://httpbin.org/get" "" nil 10 -}}
 
-    httpReq "POST" "https://httpbin.org/post" "hello" nil 10
+    {{- $resp := httpReq nil "POST" "https://httpbin.org/post" "hello" nil 10 -}}
 
-    httpReq "GET" "https://httpbin.org/headers" "" (httpHeader "HeaderName" "value") 10
+    {{- $resp := httpReq nil "GET" "https://httpbin.org/headers" "" (httpHeader "HeaderName" "value") 10 -}}
+
+    {{- /* uses the ctx from .Request, httpReq will be interrupted if the client disconnects. */ -}}
+    {{- $resp :=httpReq .Request.Context "GET" "https://httpbin.org/delay/10" "" nil 60 -}}
     ```
 
-    `ResponseWrapper` has all the fields of `http.Response` and adds a `Text` method, which returns the entire response body as text.
+    The `ResponseWrapper` object embeds a `http.Response`, so all the fields in the `http.Response` can be accessed by the `ResponseWrapper.Response.XXX`. It also comes with additional methods to handle the http response.
 
     ```go-template
-    (httpReq "GET" "https://httpbin.org" "" nil 10).Text | fromJson
+    {{- /* Text(): it returns the whole response body as a string */ -}}
+    {{- $resp := httpReq nil "GET" "https://httpbin.org/get" "" nil 10 -}}
+    StatusCode: {{ $resp.Response.StatusCode }}
+    Response: {{ $resp.Text }}
+
+    {{- /* LastLocation(): httpReq automatically follows redirects,
+                           so LastLocation() can be used to get the last location */ -}}
+    {{- $url := "https://httpbin.org/redirect-to?url=https://httpbin.org/base64/aGVsbG8K" -}}
+    {{- $resp := httpReq nil "GET" $url "" nil 10 -}}
+    Url: {{ $url }}
+    Last Location: {{ $resp.LastLocation }}
     ```
 
-* `httpHeader(v ...string)`：Creates a `HeaderWrapper` (mainly used for `httpReq`) with an even number of arguments.
+* `tryHttpReq(ctx, method, url, body, headers, timeoutSec)` - It is the same as `httpReq` except that it does not abort the execution of the template in case of an error.
 
     ```go-template
-    httpHeader "Header1" "value1" "Header2" "value2"
+    {{- /* will hit a "deadline exceeded" error */ -}}
+    {{- $resp := tryHttpReq nil "GET" "https://httpbin.org/delay/10" "" nil 1 -}}
+    {{- if not $resp -}}
+      {{ "request failed" }}
+    {{- end -}}
     ```
 
-* `parseUrl(url)`：Parses the url and returns a `url.URL` object.
+* `httpHeader(v ...string)` - Creates a `HeaderWrapper` (mainly used for `httpReq`) with an even number of arguments.
 
     ```go-template
-    (parseUrl "https://httpbin.org/").Host
+    {{- httpHeader "Header1" "value1" "Header2" "value2" -}}
     ```
 
-* `urlproxiedUrl(url, urlproxyBaseUrl, uopts ...string)`：Converts to a proxied url (then used with `httpReq`).
+* `parseUrl(url)` - Parses the url and returns a `url.URL` object.
 
     ```go-template
-    urlproxiedUrl "https://httpbin.org/" "http://127.0.0.1:8765/" "uOptScheme" "http" "uOptTimeoutMs" "3000"
+    {{- (parseUrl "https://httpbin.org/").Host -}}
+    ```
+
+* `urlproxiedUrl(url, urlproxyBaseUrl, uopts ...string)` - Converts to a proxied url (then used with `httpReq`).
+
+    ```go-template
+    {{- urlproxiedUrl "https://httpbin.org/" "http://127.0.0.1:8765/" "uOptScheme" "http" "uOptTimeoutMs" "3000" -}}
     ```
 
     The address of the current `urlproxy` instance can be obtained via the template variable `.ExtraValues.urlproxyBaseUrl`.
 
     ```go-template
-    urlproxiedUrl "https://httpbin.org/" .ExtraValues.urlproxyBaseUrl
+    {{- urlproxiedUrl "https://httpbin.org/" .ExtraValues.urlproxyBaseUrl -}}
+    ```
+
+* `save(namespace, key, value)` - Stores a key value in the persistent store. The location of the store can be specified with the `-kvstore-dir` flag when starting `urlproxy`. Note that `save` may fail for various reasons, the return value indicates success or not.
+
+    ```go-template
+    {{- $ok := save "example" "foo" "bar" -}}
+    ```
+
+* `mustSave(namespace, key, value)` - The same as `save` except that it aborts the execution if an error occurs.
+
+    ```go-template
+    {{- mustSave "example" "foo" "bar" -}}
+    ```
+
+* `load(namespace, key)` - Loads the previously saved value. Returns an empty string if the key is not found or an error has occurred.
+
+    ```go-template
+    {{- load "example" "foo" -}}
+    ```
+
+* `mustLoad(namespace, key)` - The same as `load` except that it aborts the execution if an error occurs.
+
+    ```go-template
+    {{- mustLoad "example" "foo" -}}
+    ```
+
+* `execTemplate(name, data)` - It executes the sub-template defined by the `define` action and captures the render result. The idea comes from this [SO answer](https://stackoverflow.com/a/40170999).
+
+    ```go-template
+    {{- define "greet" -}}
+      {{- printf "Hello %s!" . -}}
+    {{- end -}}
+
+    {{- /* $msg should be "Hello Bob!" */ -}}
+    {{- $msg := execTemplate "greet" "Bob" -}}
+    ```
+
+* `debug(format, ...any)` - It writes a message to the urlproxy log with DEBUG level. The `-debug` parameter should be set when starting `urlproxy` to see these logs.
+
+    ```go-template
+    {{- $_ := debug "Hello %s!" "Bob" -}}
     ```
 
 ## HLSBoost

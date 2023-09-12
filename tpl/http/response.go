@@ -17,3 +17,10 @@ func (resp ResponseWrapper) Text() (string, error) {
 	resp.Body.Close()
 	return string(data), nil
 }
+
+func (resp ResponseWrapper) LastLocation() string {
+	if resp.Request != nil && resp.Request.URL != nil {
+		return resp.Request.URL.String()
+	}
+	return ""
+}

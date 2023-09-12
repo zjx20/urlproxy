@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-
-	"github.com/zjx20/urlproxy/logger"
 )
 
 // tplTransport implements RoundTripper for the 'tpl' protocol.
@@ -73,9 +71,6 @@ func (t tplTransport) RoundTrip(req *http.Request) (resp *http.Response, err err
 	rw, resc := newPopulateResponseWriter()
 	go func() {
 		err := t.render(rw, req)
-		if err != nil {
-			logger.Errorf("tpl render error: %s", err)
-		}
 		rw.finish(err)
 	}()
 	return <-resc, nil

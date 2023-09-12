@@ -2,12 +2,15 @@ package tpl
 
 import (
 	"bufio"
+	"bytes"
+	"fmt"
 	"net/http"
 	"text/template"
 
 	sprig "github.com/go-task/slim-sprig"
-
+	"github.com/zjx20/urlproxy/logger"
 	tplhttp "github.com/zjx20/urlproxy/tpl/http"
+	"github.com/zjx20/urlproxy/tpl/storage"
 )
 
 type renderContext struct {
@@ -16,10 +19,30 @@ type renderContext struct {
 	ExtraValues    map[string]interface{}
 }
 
+func tplFuncs(tPtr **template.Template) template.FuncMap {
+	return template.FuncMap{
+		"execTemplate": func(name string, data interface{}) (string, error) {
+			buf := &bytes.Buffer{}
+			err := (*tPtr).ExecuteTemplate(buf, name, data)
+			return buf.String(), err
+		},
+		"debug": func(format string, args ...interface{}) string {
+			msg := fmt.Sprintf(format, args...)
+			logger.Debugf("%s", msg)
+			return msg
+		},
+	}
+}
+
 func render(tpl string, rw http.ResponseWriter, req *http.Request,
 	extraValues map[string]interface{}) error {
-	fmap := sprig.TxtFuncMap()
-	t, err := template.New("").Funcs(fmap).Funcs(tplhttp.Funcs()).Parse(tpl)
+	var t *template.Template
+	t, err := template.New("").
+		Funcs(tplFuncs(&t)).
+		Funcs(sprig.TxtFuncMap()).
+		Funcs(tplhttp.Funcs()).
+		Funcs(storage.Funcs()).
+		Parse(tpl)
 	if err != nil {
 		return err
 	}
@@ -36,5 +59,11 @@ func render(tpl string, rw http.ResponseWriter, req *http.Request,
 	// status code to the client.
 	bw := bufio.NewWriterSize(rw, 8192)
 	defer bw.Flush()
-	return t.Execute(bw, rCtx)
+	err = t.Execute(bw, rCtx)
+	if err != nil {
+		logger.Errorf("tpl render error: %s", err)
+		rw.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(bw, "Error: %s", err)
+	}
+	return err
 }

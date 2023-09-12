@@ -14,3 +14,7 @@ func (rw ResponseWriterWrapper) WriteHeader(statusCode int) ResponseWriterWrappe
 	rw.ResponseWriter.WriteHeader(statusCode)
 	return rw
 }
+
+func (rw ResponseWriterWrapper) WriteString(str string) (int, error) {
+	return rw.ResponseWriter.Write([]byte(str))
+}
