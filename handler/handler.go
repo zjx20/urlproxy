@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 
+	"github.com/zjx20/urlproxy/logger"
 	"github.com/zjx20/urlproxy/urlopts"
 )
 
@@ -25,6 +26,7 @@ func Register(handler HttpHandler) {
 }
 
 func ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	logger.Debugf("ServeHTTP, url: %s", r.URL.String())
 	after, opts := urlopts.Extract(r.URL)
 	r.URL = &after
 	for _, h := range stack {

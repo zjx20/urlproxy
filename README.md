@@ -425,7 +425,7 @@ Then give the proxied link to the player for accelerated performance!
 
 ### Optional Parameters
 
-* `uOptHLSPrefetches`: Specifies the number of concurrent downloads for segments; default value is 1.
+* `uOptHLSPrefetches`: Specifies the number of concurrent downloads for segments; default value is 3 and set to 0 to disable prefetching.
 
 * `uOptAntConcurrentPieces`: Specifies the number of threads used for multi-threaded downloads; setting this value to 1 disables multi-threaded downloads; default value is 5.
 

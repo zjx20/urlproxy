@@ -232,6 +232,10 @@ func (p *playlist) StopPrefetch(handle any) {
 	}
 }
 
+func (p *playlist) MaxPrefetches() int {
+	return p.maxPrefetches
+}
+
 func (p *playlist) runLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -269,6 +273,10 @@ func (p *playlist) runLoop() {
 func (p *playlist) tryPrefetch() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.maxPrefetches <= 0 {
+		// prefetching is disabled
+		return
+	}
 	fetchings := 0
 	for _, seg := range p.segments {
 		status := seg.Status()

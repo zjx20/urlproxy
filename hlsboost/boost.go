@@ -72,12 +72,18 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 	segId, _ := urlopts.OptHLSSegment.ValueFrom(opts)
 	user := h.mgr.GetUserAcquired(userId) // not nil
 	defer user.Release()
+	// get segment and playback progress will be updated as a side effect
 	seg := user.GetSegmentAcquired(pl, segId)
 	if seg == nil {
 		// fallback to normal proxy
 		return false
 	}
 	defer seg.Release()
+	if pl.MaxPrefetches() <= 0 {
+		// prefetching is disabled, fallback to normal proxy
+		return false
+	}
+
 	logger.Debugf("serving segment %s, req: %+v", seg.segId, req)
 	segSize, _ := seg.TotalSize(req.Context()) // blocking
 	// status should be more reliable after getting total size
