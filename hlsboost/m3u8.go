@@ -1,6 +1,9 @@
 package hlsboost
 
 import (
+	"fmt"
+	"net/url"
+
 	"github.com/zjx20/urlproxy/urlopts"
 
 	"github.com/etherlabsio/go-m3u8/m3u8"
@@ -64,7 +67,19 @@ func rewriteM3U8(pl *m3u8.Playlist, parentURI string, opts *urlopts.Options) *m3
 				cloneOpts.Remove(urlopts.OptHLSPlaylist)
 				cloneOpts.Remove(urlopts.OptHLSSegment)
 			}
-			clone.Segment = toUrlproxyURI(parentURI, clone.Segment, cloneOpts)
+			if v, _ := urlopts.OptHLSShortUrl.ValueFrom(cloneOpts); v {
+				user, _ := urlopts.OptHLSUser.ValueFrom(cloneOpts)
+				playlist, _ := urlopts.OptHLSPlaylist.ValueFrom(cloneOpts)
+				segment, _ := urlopts.OptHLSSegment.ValueFrom(cloneOpts)
+				shortUrl := fmt.Sprintf("/%s=%s/%s=%s/%s=%s",
+					urlopts.OptHLSUser.OptionKey(), url.PathEscape(user),
+					urlopts.OptHLSPlaylist.OptionKey(), url.PathEscape(playlist),
+					urlopts.OptHLSSegment.OptionKey(), url.PathEscape(segment),
+				)
+				clone.Segment = shortUrl
+			} else {
+				clone.Segment = toUrlproxyURI(parentURI, clone.Segment, cloneOpts)
+			}
 			clonePl.Items[idx] = &clone
 		}
 	}

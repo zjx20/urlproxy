@@ -42,8 +42,9 @@ func (h *SelfClient) ToFinalUrl(relativeToPath string, uri string,
 	return fmt.Sprintf("%s://%s%s", h.scheme, h.addr, path)
 }
 
-func manipulateRequestToSkipHlsBoost(req *http.Request) {
+func manipulateRequestToSkipHlsBoost(req *http.Request) *http.Request {
 	req.Header.Set(headerSkipHLSBoost, "true")
+	return req
 }
 
 func toUrlproxyURI(relativeToPath string, uri string, opts *urlopts.Options) string {

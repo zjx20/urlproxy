@@ -433,6 +433,8 @@ Then give the proxied link to the player for accelerated performance!
 
 * `uOptHLSTimeoutMs`: Timeout for fetching `m3u8` playlist or segments; default value is 5000 (5 seconds).
 
+* `uOptHLSShortUrl`: `HLSBoost` proxies and modifies the m3u8 playlist, rewriting the segment urls to add some tracking information. Some software cannot handle urls that are too long, such as `tvheadend`, which truncates long urls. In this case, you can enable the short url feature by passing the `uOptHLSShortUrl=true` parameter and `HLSBoost` will generate shorter segment urls to avoid this problem. If the short url feature is not enabled, the generated urls will contain the original address information of the segment, so even if the client requests an expired segment, it can still be served using this original address information. Conversely, if the short url feature is enabled, expired segments cannot be served.
+
 # License
 
 MIT

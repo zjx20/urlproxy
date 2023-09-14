@@ -47,7 +47,7 @@ type waiter struct {
 	ch     chan struct{}
 }
 
-type RequestManipulator func(req *http.Request)
+type RequestManipulator func(req *http.Request) *http.Request
 
 type Downloader struct {
 	mu        sync.Mutex
@@ -341,6 +341,17 @@ func (d *Downloader) writeAt(data []byte, offset int64) error {
 	return nil
 }
 
+func (d *Downloader) MakeRequest(ctx context.Context) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if d.rm != nil {
+		req = d.rm(req)
+	}
+	return req, nil
+}
+
 func (d *Downloader) download(ctx context.Context,
 	eventCh chan interface{}, probing bool, r dataRange) {
 	sendEv := func(ev interface{}) {
@@ -365,7 +376,7 @@ func (d *Downloader) download(ctx context.Context,
 	}
 	ctx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
+	req, err := d.MakeRequest(ctx)
 	if err != nil {
 		logger.Errorf("new request error: %s", err)
 		feedback(err, false)
@@ -373,9 +384,6 @@ func (d *Downloader) download(ctx context.Context,
 	}
 	if r != wholeFile {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", r.begin, r.end-1))
-	}
-	if d.rm != nil {
-		d.rm(req)
 	}
 	dog := newWatchDog(cancelFn, d.timeout)
 	defer dog.stop()

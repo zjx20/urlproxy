@@ -53,11 +53,15 @@ func (h *hlsBoost) handle(w http.ResponseWriter, req *http.Request, opts *urlopt
 	return false
 }
 
+func isShortLink(req *http.Request) bool {
+	return req.URL.Path == "/"
+}
+
 func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) bool {
 	if !urlopts.OptHLSPlaylist.ExistsIn(opts) ||
 		!urlopts.OptHLSUser.ExistsIn(opts) ||
 		!urlopts.OptHLSSegment.ExistsIn(opts) {
-		// fallback to normal proxy
+		// fallback to the normal proxying
 		return false
 	}
 	playlistId, _ := urlopts.OptHLSPlaylist.ValueFrom(opts)
@@ -75,12 +79,23 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 	// get segment and playback progress will be updated as a side effect
 	seg := user.GetSegmentAcquired(pl, segId)
 	if seg == nil {
-		// fallback to normal proxy
+		if isShortLink(req) {
+			// unable to handle the short link if segment is not found
+			w.WriteHeader(http.StatusGone)
+			return true
+		}
+		// fallback to the normal proxying
 		return false
 	}
 	defer seg.Release()
 	if pl.MaxPrefetches() <= 0 {
-		// prefetching is disabled, fallback to normal proxy
+		// prefetching is disabled
+		if isShortLink(req) {
+			// it's a short link, should be handled in-place
+			h.serveShortLinkSegment(w, req, opts, seg)
+			return true
+		}
+		// fallback to the normal proxying
 		return false
 	}
 
@@ -128,6 +143,25 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 		}
 	}
 	return true
+}
+
+func (h *hlsBoost) serveShortLinkSegment(w http.ResponseWriter, req *http.Request,
+	opts *urlopts.Options, seg *segment) {
+	req, err := seg.downloader.MakeRequest(req.Context())
+	if err != nil {
+		logger.Errorf("make request error: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Errorf("serveShortLinkSegment error: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	proxy.ForwardResponse(w, resp)
 }
 
 // How to Track the Client:
