@@ -1,12 +1,18 @@
 package urlopts
 
 import (
+	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/zjx20/urlproxy/logger"
+)
+
+var (
+	queryParamRegexp = regexp.MustCompile(fmt.Sprintf("(^|&)((%s[^=]*)=([^&]*))", UrlOptionPrefix))
 )
 
 type Options struct {
@@ -100,30 +106,36 @@ func pathUnescaped(s string) string {
 	return s
 }
 
-func Extract(u *url.URL) (after url.URL, opts *Options) {
-	after = *u
-	query := after.Query()
-	uopts := url.Values{}
-	updated := false
-	for k, v := range query {
-		if ok, oName := extractOptionName(k); ok {
-			delete(query, k)
-			uopts[oName] = v
-			updated = true
-		}
-	}
-	// some http servers have strict request verification, and even the order
-	// of query parameters cannot be changed, so try not to modify RawQuery.
-	if updated {
-		after.RawQuery = query.Encode()
-	}
+func setRawPath(u *url.URL, rawPath string) {
+	u.RawPath = rawPath
+	u.Path = pathUnescaped(rawPath)
+}
 
-	path := after.RawPath
-	if path == "" {
-		path = after.Path
+func Extract(u *url.URL) (after url.URL, opts *Options) {
+	// Some of the http servers have strict request verification, even the
+	// order of query parameters is not allowed to change. So we can't extract
+	// url options by using u.Query() and query.Encode(), which can change the
+	// order of the query parameters.
+	uopts := url.Values{}
+	rawQuery := u.RawQuery
+	matches := queryParamRegexp.FindAllStringSubmatch(rawQuery, -1)
+	for _, match := range matches {
+		k := match[3]
+		v := match[4]
+		rm := match[0]
+		if ok, oName := extractOptionName(k); ok {
+			uopts.Add(oName, v)
+		}
+		rawQuery = strings.ReplaceAll(rawQuery, rm, "")
 	}
+	// hack: the regexp does not capture the "&" at the right side,
+	//       it's possible to leave a "&" at the front.
+	//       e.g. input "uOptHost=myhost&foo=bar", after processing: "&foo=bar"
+	rawQuery = strings.TrimPrefix(rawQuery, "&")
+
+	rawPath := u.EscapedPath()
 	var filtered []string
-	for _, seg := range strings.Split(path, "/") {
+	for _, seg := range strings.Split(rawPath, "/") {
 		if seg == "" {
 			continue
 		}
@@ -159,8 +171,14 @@ func Extract(u *url.URL) (after url.URL, opts *Options) {
 			}
 		}
 	}
-	after.Path = "/" + strings.Join(filtered, "/")
+	rawPath = strings.Join(filtered, "/")
+	if strings.HasPrefix(u.Path, "/") {
+		rawPath = "/" + rawPath
+	}
 
+	after = *u
+	after.RawQuery = rawQuery
+	setRawPath(&after, rawPath)
 	opts = conv(uopts)
 	return
 }
@@ -172,6 +190,7 @@ func ToList(opts *Options) []string {
 		if !opt.IsPresent() {
 			return true
 		}
+		// note: ToUrlOption() is already escaped by url.PathEscape()
 		result = append(result, opt.ToUrlOption()...)
 		return true
 	})
@@ -191,20 +210,23 @@ func RelocateToUrlproxy(u *url.URL, opts *Options) *url.URL {
 		// it's an absolute url, convert it into a relative url for urlproxy
 		cloneOpts.Set(OptScheme.New(u.Scheme))
 		cloneOpts.Set(OptHost.New(u.Host))
-		optPath := SortedOptionPath(cloneOpts)
-		u.Path = "/" + optPath + u.Path
+		optRawPath := SortedOptionPath(cloneOpts)
+		rawPath := "/" + optRawPath + u.EscapedPath()
+		setRawPath(u, rawPath)
 		u.Scheme = ""
 		u.Host = ""
 	} else {
 		// it's a relative url
-		optPath := SortedOptionPath(cloneOpts)
-		if optPath != "" {
+		optRawPath := SortedOptionPath(cloneOpts)
+		if optRawPath != "" {
 			if strings.HasPrefix(u.Path, "/") {
 				// absolute path
-				u.Path = "/" + optPath + u.Path
+				rawPath := "/" + optRawPath + u.EscapedPath()
+				setRawPath(u, rawPath)
 			} else {
 				// relative path
-				u.Path = optPath + "/" + u.Path
+				rawPath := optRawPath + "/" + u.EscapedPath()
+				setRawPath(u, rawPath)
 			}
 		}
 	}
