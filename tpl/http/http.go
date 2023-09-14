@@ -48,10 +48,7 @@ func httpReq(ctx context.Context, method string, url string, body string,
 		}
 	}
 	resp, err := http.DefaultClient.Do(req)
-	if resp != nil {
-		return &ResponseWrapper{resp}, err
-	}
-	return nil, err
+	return &ResponseWrapper{resp, err}, err
 }
 
 func httpHeader(arr ...string) *HeaderWrapper {

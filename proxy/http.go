@@ -537,6 +537,7 @@ func Handle(w http.ResponseWriter, req *http.Request, opts *urlopts.Options) boo
 		w.Write([]byte(err.Error()))
 		return true
 	}
+	logger.Debugf("proxyResp for %s, StatusCode: %d", proxyReq.URL.String(), proxyResp.StatusCode)
 	rewriteLocation(proxyResp, req, opts)
 	extraRespHeader, _ := urlopts.OptRespHeader.ValueFrom(opts)
 	if len(extraRespHeader) > 0 {

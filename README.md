@@ -312,7 +312,7 @@ All functions from [slim-sprig](https://github.com/go-task/slim-sprig) are avail
     {{- $resp :=httpReq .Request.Context "GET" "https://httpbin.org/delay/10" "" nil 60 -}}
     ```
 
-    The `ResponseWrapper` object embeds a `http.Response`, so all the fields in the `http.Response` can be accessed by the `ResponseWrapper.Response.XXX`. It also comes with additional methods to handle the http response.
+    The `ResponseWrapper` object embeds a `http.Response`, so all the fields in the `http.Response` can be accessed by the `ResponseWrapper.Response.XXX`. `ResponseWrapper` also comes with additional methods to handle the http response.
 
     ```go-template
     {{- /* Text(): it returns the whole response body as a string */ -}}
@@ -328,13 +328,13 @@ All functions from [slim-sprig](https://github.com/go-task/slim-sprig) are avail
     Last Location: {{ $resp.LastLocation }}
     ```
 
-* `tryHttpReq(ctx, method, url, body, headers, timeoutSec)` - It is the same as `httpReq` except that it does not abort the execution of the template in case of an error.
+* `tryHttpReq(ctx, method, url, body, headers, timeoutSec)` - It is the same as `httpReq` except that it does not abort the execution of the template in case of an error. If it does, `ResponseWrapper.Response` will be `nil` and the error can be retrieved using `ResponseWrapper.Error`.
 
     ```go-template
     {{- /* will hit a "deadline exceeded" error */ -}}
     {{- $resp := tryHttpReq nil "GET" "https://httpbin.org/delay/10" "" nil 1 -}}
-    {{- if not $resp -}}
-      {{ "request failed" }}
+    {{- if $resp.Error -}}
+      {{ printf "request failed, err: %s" $resp.Error }}
     {{- end -}}
     ```
 
