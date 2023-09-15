@@ -172,6 +172,13 @@ func (p *playlist) GetSegmentsFrom(seq int, count int) *m3u8.Playlist {
 	if tail > len(p.m3.Items) {
 		tail = len(p.m3.Items)
 	}
+	// this is a workaround:
+	//   tvheadend reports "iptv: m3u contents parsing failed" if the m3u8
+	//   file only contains one item, and then it stop the playback.
+	if tail-off < 2 && off > 0 {
+		off -= 1
+	}
+
 	pl := *p.m3
 	pl.Items = append([]m3u8.Item{}, pl.Items[off:tail]...)
 	pl.Sequence += off
