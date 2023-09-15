@@ -101,6 +101,33 @@ func newUser(id string) *user {
 	}
 }
 
+func preserveRecentSegments(m3 *m3u8.Playlist) {
+	const preservedDuration = 20
+	const minItems = 3 // don't smaller then 2!
+	segments := m3.Segments()
+	sum := float64(0)
+	off := -1
+	for i := len(segments) - 1; i >= 0; i-- {
+		sum += segments[i].Duration
+		if sum >= preservedDuration {
+			off = i
+			break
+		}
+	}
+	if off < minItems {
+		off = minItems
+	}
+	if off < len(segments) {
+		var target m3u8.Item = segments[off]
+		for i := 0; i < len(m3.Items); i++ {
+			if m3.Items[i] == target {
+				m3.Items = m3.Items[0:i]
+				break
+			}
+		}
+	}
+}
+
 func (u *user) GetM3U8(pl *playlist) *m3u8.Playlist {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -116,7 +143,17 @@ func (u *user) GetM3U8(pl *playlist) *m3u8.Playlist {
 	}
 	s.setPlaylist(pl)
 	s.update(s.latestSeq) // update lastTime
-	return pl.GetSegmentsFrom(s.latestSeq, 10)
+	m3 := pl.GetSegmentsFrom(s.latestSeq, 10)
+	if s.latestSeq == -1 {
+		// The player tends to start playing from the second most recent
+		// segment segment, leaving us with a very short fault tolerance
+		// time to maintain the playlist.
+		// By holding back some of the most recent segments when the client
+		// first fetches the m3u8, it would start playing from a relatively
+		// earlier position.
+		preserveRecentSegments(m3)
+	}
+	return m3
 }
 
 func (u *user) GetSegmentAcquired(pl *playlist, segId string) *segment {

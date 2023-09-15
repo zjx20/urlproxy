@@ -430,7 +430,7 @@ func (p *playlist) appendItemsLocked(news []m3u8.Item) {
 
 func (p *playlist) resetLocked(m3 *m3u8.Playlist) {
 	p.filterOut(m3)
-	updateInterval := 2 * m3.Target
+	updateInterval := m3.Target
 	if updateInterval > int(maxUpdateIntervalSec) {
 		updateInterval = maxUpdateIntervalSec
 	}
