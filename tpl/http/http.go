@@ -35,8 +35,6 @@ func httpReq(ctx context.Context, method string, url string, body string,
 		ctx = context.Background()
 	}
 	timeout := time.Duration(timeoutSec) * time.Second
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	r := strings.NewReader(body)
 	req, err := http.NewRequestWithContext(ctx, method, url, r)
 	if err != nil {
@@ -47,7 +45,11 @@ func httpReq(ctx context.Context, method string, url string, body string,
 			req.Header[k] = v
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if timeout > 0 {
+		client = &http.Client{Timeout: timeout}
+	}
+	resp, err := client.Do(req)
 	return &ResponseWrapper{resp, err}, err
 }
 
