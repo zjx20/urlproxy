@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zjx20/urlproxy/ant"
+	"github.com/zjx20/urlproxy/app/info"
 	"github.com/zjx20/urlproxy/handler"
 	"github.com/zjx20/urlproxy/logger"
 	"github.com/zjx20/urlproxy/proxy"
@@ -24,7 +25,8 @@ var (
 	cacheDir = flag.String("cache-dir", "./hlscache", "Cache dir for HLS Boost")
 )
 
-func Handler(selfCli *SelfClient) handler.HttpHandler {
+func Handler() handler.HttpHandler {
+	selfCli := NewSelfClient("http", info.GetListenAddr().String())
 	return (&hlsBoost{
 		selfCli: selfCli,
 		mgr:     globalManager(),
@@ -53,7 +55,7 @@ func (h *hlsBoost) handle(w http.ResponseWriter, req *http.Request, opts *urlopt
 	return false
 }
 
-func isShortLink(req *http.Request) bool {
+func isShortUrl(req *http.Request) bool {
 	return req.URL.Path == "/"
 }
 
@@ -79,7 +81,7 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 	// get segment and playback progress will be updated as a side effect
 	seg := user.GetSegmentAcquired(pl, segId)
 	if seg == nil {
-		if isShortLink(req) {
+		if isShortUrl(req) {
 			// unable to handle the short link if segment is not found
 			w.WriteHeader(http.StatusGone)
 			return true
@@ -90,9 +92,9 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 	defer seg.Release()
 	if pl.MaxPrefetches() <= 0 {
 		// prefetching is disabled
-		if isShortLink(req) {
-			// it's a short link, should be handled in-place
-			h.serveShortLinkSegment(w, req, opts, seg)
+		if isShortUrl(req) {
+			// it's a short url, should be handled in-place
+			h.serveShortUrlSegment(w, req, opts, seg)
 			return true
 		}
 		// fallback to the normal proxying
@@ -145,18 +147,29 @@ func (h *hlsBoost) serveSegment(w http.ResponseWriter, req *http.Request, opts *
 	return true
 }
 
-func (h *hlsBoost) serveShortLinkSegment(w http.ResponseWriter, req *http.Request,
+var forwardHeaders = []string{
+	"Accept",
+	"Range",
+}
+
+func (h *hlsBoost) serveShortUrlSegment(w http.ResponseWriter, req *http.Request,
 	opts *urlopts.Options, seg *segment) {
-	req, err := seg.downloader.MakeRequest(req.Context())
+	segReq, err := seg.downloader.MakeRequest(req.Context())
 	if err != nil {
 		logger.Errorf("make request error: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		return
 	}
-	resp, err := http.DefaultClient.Do(req)
+	for _, header := range forwardHeaders {
+		if val := req.Header.Get(header); val != "" {
+			segReq.Header.Set(header, val)
+		}
+	}
+	segReq.Header.Add("Access-Control-Allow-Origin", "*")
+	resp, err := http.DefaultClient.Do(segReq)
 	if err != nil {
-		logger.Errorf("serveShortLinkSegment error: %s", err)
+		logger.Errorf("serveShortUrlSegment error: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		return

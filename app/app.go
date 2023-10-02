@@ -37,8 +37,9 @@ func Run() {
 	}
 	logger.Infof("listen to %s", ln.Addr().String())
 	info.SetListenAddr(ln.Addr())
-	selfCli := hlsboost.NewSelfClient("http", ln.Addr().String())
-	handler.Register(hlsboost.Handler(selfCli)) // TODO: refactor
+
+	// setup handlers, order does matter
+	handler.Register(hlsboost.Handler())
 	handler.Register(proxy.Handle)
 	http.Serve(ln, http.HandlerFunc(handler.ServeHTTP))
 	logger.Infof("exit")

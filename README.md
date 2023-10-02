@@ -297,7 +297,7 @@ sha1sum of "hello" is aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
 
 ### Template Functions
 
-All functions from [slim-sprig](https://github.com/go-task/slim-sprig) are available in the template context. `urlproxy` also provides other useful functions.
+All functions from [slim-sprig](https://github.com/go-task/slim-sprig) are available in the template context. `timeoutSec` can be 0, which means no timeout. `urlproxy` also provides other useful functions.
 
 * `httpReq(ctx, method, url, body, headers, timeoutSec)` - Initiates an http request. Returns a `ResponseWrapper` object.
 
